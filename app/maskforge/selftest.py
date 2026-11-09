@@ -464,6 +464,17 @@ def run_selftest(log_path: str | None = None) -> int:
         mw.templates_page._use(sp.tpl)
         assert mw.spec_page.tpl["id"] == sp.tpl["id"]
         log("template library ok")
+        # 左侧面板不能被撑得比可见区域宽（之前右半边按钮被切掉）
+        for pg in (mw.spec_page, mw.detail_page):
+            sa = pg.findChild(QScrollArea)
+            if sa and sa.widget():
+                log(f"panel width: content {sa.widget().minimumSizeHint().width()} / visible {sa.viewport().width()}")
+                assert sa.widget().minimumSizeHint().width() <= sa.viewport().width() + 2, \
+                    f"面板内容太宽：{sa.widget().minimumSizeHint().width()} > {sa.viewport().width()}"
+        from .spec_engine import default_name
+        assert default_name("C:/x/93f31607-61c0-4001-a64a-1e38779a243f.png", "spec").startswith("规格模板")
+        assert default_name("C:/x/7114黑色.png", "spec") == "7114黑色"
+        log("side panel width ok")
         assert not sp.in_review() and sp.film_bar.isVisibleTo(sp) and sp.tpl.get("confirmed")
         log("review step ok")
         # ---- 正面 / 背面判断 ----

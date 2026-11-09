@@ -72,7 +72,18 @@ def scroll_page(*cards) -> tuple[QScrollArea, QVBoxLayout]:
         v.addWidget(c)
     v.addStretch(1)
     area.setWidget(inner)
+    _no_overflow(inner)
     return area, v
+
+
+def _no_overflow(root: QWidget):
+    """面板里的下拉框按内容自动变宽时，会把整个面板撑得比可见区域还宽，右边被切掉。统一限制住。"""
+    from PySide6.QtWidgets import QComboBox
+    for cb in root.findChildren(QComboBox):
+        if cb.sizeAdjustPolicy() == QComboBox.SizeAdjustPolicy.AdjustToContentsOnFirstShow or \
+                cb.sizeAdjustPolicy() == QComboBox.SizeAdjustPolicy.AdjustToContents:
+            cb.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            cb.setMinimumContentsLength(6)
 
 
 class SliderRow(QWidget):

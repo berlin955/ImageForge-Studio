@@ -210,6 +210,46 @@ def _sample(img, pts):
     return img[yi, xi]
 
 
+def corner_radius(grad, x0, y0, x1, y1, fixed):
+    """估计圆角大小（占短边的比例）。贴着整张图边缘的角不算（那里不可能是圆角）。
+    直角的框，对角线一进去就碰到边；圆角的框，要走一段才碰到边：走的距离 d 和圆角半径 r 的关系是 d = r·(1 − 1/√2)。"""
+    h, w = grad.shape
+    side = min(x1 - x0, y1 - y0)
+    if side < 20:
+        return None
+    reach = int(side * 0.16)          # 最多走到胶囊形的程度（d = 0.5·side·0.293）
+    ds = []
+    corners = [(x0, y0, 1, 1, fixed[0] or fixed[1]), (x1, y0, -1, 1, fixed[2] or fixed[1]),
+               (x0, y1, 1, -1, fixed[0] or fixed[3]), (x1, y1, -1, -1, fixed[2] or fixed[3])]
+    for cx, cy, sx, sy, fx in corners:
+        if fx:
+            continue
+        prof = []
+        for t in range(0, reach):
+            xs = int(round(cx + sx * t))
+            ys = int(round(cy + sy * t))
+            if not (0 <= xs < w and 0 <= ys < h):
+                break
+            prof.append(grad[max(0, ys - 1):ys + 2, max(0, xs - 1):xs + 2].max())
+        if len(prof) < 4:
+            continue
+        prof = np.array(prof)
+        peak = float(prof.max())
+        if peak < 15:
+            continue
+        # 第一个明显的边（强度达到最大值的 60%）
+        d = int(np.argmax(prof >= peak * 0.6))
+        ds.append(d)
+    if not ds:
+        return None
+    d = float(np.median(ds))
+    if len(ds) >= 2 and (max(ds) - min(ds)) > max(4.0, d * 0.6):
+        return 0.0                    # 几个角说法不一致：多半是照片内容，按直角算
+    r = d / (1 - 1 / np.sqrt(2))
+    ratio = r / side
+    return 0.0 if ratio < 0.02 else float(min(0.5, ratio))
+
+
 def refine_shape(rgb: np.ndarray, x: float, y: float, w: float, h: float, shape: str, radius: float):
     """把粗略找到的照片框吸附到真实的边上（原图坐标）。
     在框附近算边缘强度，微调四条边和圆角大小，让形状的轮廓刚好压在最清楚的那条边上；
@@ -263,6 +303,12 @@ def refine_shape(rgb: np.ndarray, x: float, y: float, w: float, h: float, shape:
         return float(on - 0.8 * out)
 
     best = score(p)
+    # 圆角大小：从每个角沿对角线往里走，看相框的边从哪里开始
+    if shape != "ellipse" and radius < 0.3:      # 胶囊形已经由封闭轮廓判断出来了，不再重估
+        rr = corner_radius(grad, p[0], p[1], p[2], p[3], fixed)
+        if rr is not None:
+            q = p[:4] + [rr]
+            best, p = score(q), q
     for step in (6.0, 3.0, 1.5, 0.75):
         improved = True
         loops = 0

@@ -198,14 +198,14 @@ def find_slots(rgb: np.ndarray, dets: list[dict], blocks: bool = False, text_box
                     best = (iou, g)
             if best:
                 shape, rad = best[1]["shape"], best[1]["radius"]
-            # 贴着整张图边缘的框（差几个像素）直接贴边
-            if x1 < W * 0.012:
+            # 只有真的贴着整张图边缘（差一两个像素）才吸过去；留了边距的相框不能把边距吃掉
+            if x1 < W * 0.003:
                 x1 = 0.0
-            if y1 < H * 0.012:
+            if y1 < H * 0.003:
                 y1 = 0.0
-            if x2 > W * 0.988:
+            if x2 > W * 0.997:
                 x2 = float(W)
-            if y2 > H * 0.988:
+            if y2 > H * 0.997:
                 y2 = float(H)
             slots.append({"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1, "shape": shape, "radius": rad})
     else:
@@ -524,12 +524,24 @@ def build_template(path: str, detector, name: str = "", kind: str = "spec", prog
         s["role"] = roles[i] if i < len(roles) else f"图片{i + 1}"
         s.setdefault("shape", "rect")
         s.setdefault("radius", 0.0)
-    tpl = {"id": tid, "kind": kind, "name": name or Path(path).stem, "w": W, "h": H,
+    tpl = {"id": tid, "kind": kind, "name": name or default_name(path, kind), "w": W, "h": H,
            "slots": slots, "texts": texts,
            "ocr_error": (last_error.strip().splitlines() or [""])[-1][:300] if last_error else "",
            "ocr_raw": len(ocr), "confirmed": False}
     save_template(tpl)
     return tpl
+
+
+def default_name(path: str, kind: str) -> str:
+    """模板默认名字：文件名有意义就用文件名；像 93f31607-61c0-… 这种乱码，就用「规格模板 11-10 14:32」。"""
+    import re
+    import time
+    stem = Path(path).stem
+    junk = (re.fullmatch(r"[0-9a-fA-F\-_]{12,}", stem) or re.fullmatch(r"(image|img|IMG|微信图片|下载)[_\- ]?[0-9_\-]*", stem)
+            or len(stem) > 40)
+    if stem and not junk:
+        return stem
+    return ("规格模板 " if kind == "spec" else "详情模板 ") + time.strftime("%m-%d %H:%M")
 
 
 def save_template(tpl: dict) -> None:
