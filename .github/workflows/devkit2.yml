@@ -1,0 +1,57 @@
+name: devkit2
+
+# 开发用：下载几个候选分割 / 检测模型，打包到 devkit 预发布里做对比测试（不是软件版本）
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 下载分割模型
+        run: |
+          mkdir -p kit
+          try() { echo "== $1"; curl -fL --retry 2 -o "kit/$2" "$1" && ls -la "kit/$2" || { echo "FAIL $1"; rm -f "kit/$2"; }; }
+          A=https://github.com/vietanhdev/anylabeling-assets/releases/download
+          for v in v0.4.0 v0.4.13 v0.4.15 v0.4.17; do
+            try $A/$v/mobile_sam_20230629.zip mobile_sam_$v.zip
+            try $A/$v/efficientvit_sam_l0_vit_h.zip effvit_$v.zip
+            try $A/$v/sam2_hiera_tiny_20240803.zip sam2t_$v.zip
+            try $A/$v/sam2_hiera_small_20240803.zip sam2s_$v.zip
+          done
+          H=https://huggingface.co/vietanhdev/segment-anything-2-onnx-models/resolve/main
+          try $H/sam2_hiera_tiny.encoder.onnx sam2t_enc.onnx
+          try $H/sam2_hiera_tiny.decoder.onnx sam2t_dec.onnx
+          try https://huggingface.co/yunyangx/EfficientSAM/resolve/main/efficient_sam_vitt_encoder.onnx esam_enc.onnx
+          try https://huggingface.co/yunyangx/EfficientSAM/resolve/main/efficient_sam_vitt_decoder.onnx esam_dec.onnx
+          try https://github.com/yformer/EfficientSAM/raw/main/weights/efficient_sam_vitt_encoder.onnx esam_enc2.onnx
+          try https://github.com/yformer/EfficientSAM/raw/main/weights/efficient_sam_vitt_decoder.onnx esam_dec2.onnx
+          ls -la kit
+      - name: 导出 YOLO-World（开放词汇检测：直接找「照片」）
+        run: |
+          pip install --quiet ultralytics onnx onnxslim "git+https://github.com/ultralytics/CLIP.git" || pip install --quiet ultralytics onnx onnxslim
+          cd kit
+          python - <<'PY' || true
+          from ultralytics import YOLOWorld
+          for w in ("yolov8s-worldv2.pt", "yolov8m-worldv2.pt"):
+              try:
+                  m = YOLOWorld(w)
+                  m.set_classes(["photo", "picture", "photograph of a person", "image frame"])
+                  p = m.export(format="onnx", imgsz=640, opset=12)
+                  print("exported", p)
+              except Exception as e:
+                  print("yolo-world fail", w, e)
+          PY
+          ls -la
+      - name: 上传
+        run: |
+          cd kit && rm -f *.pt && zip -r ../sam.zip . && cd .. && ls -la sam.zip
+          gh release upload devkit sam.zip -R ${{ github.repository }} --clobber

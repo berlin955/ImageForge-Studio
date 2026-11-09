@@ -337,12 +337,15 @@ class TextItem(QGraphicsObject):
         self.prepareGeometryChange()
         self.setPos(self.t["x"], self.t["y"])
         self.update()
+        self.page.schedule_bg_refresh()
 
     def boundingRect(self) -> QRectF:
         return text_rect(self.t).adjusted(-3, -3, 3, 3)
 
     def paint(self, p: QPainter, opt, widget=None):
-        draw_text(p, self.t, QPointF(0, 0))
+        from .spec_engine import text_changed
+        if text_changed(self.t):
+            draw_text(p, self.t, QPointF(0, 0))     # 没改过的字，原图上就有，不重画
         if self.page.in_review() and not self.isSelected() and not self.page.exporting:
             c = QColor(theme.current()["accent"])
             pen = QPen(c, 1.3, Qt.PenStyle.DashLine)
@@ -640,9 +643,9 @@ class TemplatePage(QWidget):
         self.review_sum.setWordWrap(True)
         self.review_sum.setStyleSheet("font-size:15px;font-weight:600;")
         cr.add(self.review_sum)
-        cr.add(muted("右边是处理后的样子：格子花纹的地方是已经抠空的照片位（模特连同照片背景），"
-                     "虚线框是识别出来的文字，原来的字已经擦掉，下面「文字」里可以直接改内容和字体。\n"
-                     "按住上方「看原图」可以对比。"))
+        cr.add(muted("格子花纹 = 已经抠空的照片位（模特连同照片背景）。\n"
+                     "虚线框 = 识别出来的文字。文字保持原样不动；"
+                     "在下面「文字」里改了哪段，才会擦掉那段原字、换成新字。"))
         b_adj = button("调整识别结果", "", "拖动照片位的边角改范围，或在空白处拖出漏掉的照片位")
         b_adj.clicked.connect(lambda: self.b_edit.setChecked(not self.b_edit.isChecked()))
         b_redo = button("重新识别", "Ghost")
@@ -1023,11 +1026,33 @@ class TemplatePage(QWidget):
                 it.update()
         self._update_side()
 
+    def _composite(self) -> QImage:
+        from .spec_engine import composite_bg, text_changed
+        self._bg_sig = tuple(t["id"] for t in self.tpl["texts"] if text_changed(t))
+        return composite_bg(self.tpl)
+
+    def schedule_bg_refresh(self):
+        """改了字以后，把原字那块换成擦干净的底（稍等一下再换，打字时不卡）。"""
+        if not hasattr(self, "_bg_timer"):
+            self._bg_timer = QTimer(self)
+            self._bg_timer.setSingleShot(True)
+            self._bg_timer.setInterval(120)
+            self._bg_timer.timeout.connect(self._refresh_bg)
+        self._bg_timer.start()
+
+    def _refresh_bg(self):
+        from .spec_engine import text_changed
+        if not self.tpl or not hasattr(self, "bg_item"):
+            return
+        sig = tuple(t["id"] for t in self.tpl["texts"] if text_changed(t))
+        if sig != self._bg_sig:
+            self.bg_item.set_image(self._composite())
+
     def _show_original(self, on: bool):
         if not self.tpl:
             return
         from .spec_engine import templates_dir
-        img = QImage(str(templates_dir() / self.tpl["id"] / ("original.png" if on else "bg.png")))
+        img = QImage(str(templates_dir() / self.tpl["id"] / "original.png")) if on else self._composite()
         self.bg_item.set_image(img)
         for it in self.view.scene().items():
             if isinstance(it, (SlotItem, TextItem)):
@@ -1054,7 +1079,8 @@ class TemplatePage(QWidget):
             return
         self.stack.setCurrentIndex(1)
         self.bg_item = ImageItem()
-        self.bg_item.set_image(template_bg(self.tpl))
+        self._bg_sig = None
+        self.bg_item.set_image(self._composite())
         sc.addItem(self.bg_item)
         sc.setSceneRect(QRectF(0, 0, self.tpl["w"], self.tpl["h"]))
         for s in self.tpl["slots"]:
@@ -1375,7 +1401,8 @@ class TemplatePage(QWidget):
         p = QPainter(out)
         p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform
                          | QPainter.RenderHint.TextAntialiasing)
-        p.drawImage(QRectF(0, 0, W, H), template_bg(tpl))
+        from .spec_engine import composite_bg, text_changed
+        p.drawImage(QRectF(0, 0, W, H), composite_bg(tpl))
         for s in tpl["slots"]:
             f = self.fills.get(s["id"])
             doc = self.mw.doc_by_id(f["doc"]) if f else None
@@ -1388,7 +1415,8 @@ class TemplatePage(QWidget):
                 p.drawImage(rr, img)
                 p.restore()
         for t in tpl["texts"]:
-            draw_text(p, t)
+            if text_changed(t):
+                draw_text(p, t)
         p.end()
         return out
 

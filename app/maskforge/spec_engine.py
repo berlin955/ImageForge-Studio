@@ -438,7 +438,7 @@ def find_texts(rgb: np.ndarray, slots: list[dict], min_score: float = 0.5, ocr=N
         except Exception:
             pass
         mask[Y1:Y2, X1:X2] = np.maximum(mask[Y1:Y2, X1:X2], m * 255)
-        texts.append({
+        t = {
             "id": uuid.uuid4().hex[:8],
             "text": text,
             "x": float(x1), "y": float(y1), "w": float(w), "h": float(h),
@@ -446,7 +446,10 @@ def find_texts(rgb: np.ndarray, slots: list[dict], min_score: float = 0.5, ocr=N
             "color": "#%02x%02x%02x" % tuple(int(c) for c in color[:3]),
             "bold": density > 0.30,
             "family": "",
-        })
+            "patch": [int(X1), int(Y1), int(X2), int(Y2)],   # 改字时要擦掉的原字范围
+        }
+        t["orig"] = {k: t[k] for k in ORIG_KEYS}
+        texts.append(t)
     texts.sort(key=lambda t: (t["y"], t["x"]))
     return texts, mask
 
@@ -551,6 +554,44 @@ def load_templates(kind: str = "spec") -> list[dict]:
 
 def template_bg(tpl: dict) -> QImage:
     return QImage(str(templates_dir() / tpl["id"] / "bg.png"))
+
+
+ORIG_KEYS = ("text", "x", "y", "size", "color", "bold", "family")
+
+
+def text_changed(t: dict) -> bool:
+    """这段字有没有被改过（内容、位置、字号、颜色、字体）。没改过就保留原图上的字，一个像素都不动。"""
+    o = t.get("orig")
+    if not o or "patch" not in t:
+        return True          # 手动加的字、旧版模板：照常画
+    for k in ORIG_KEYS:
+        a, b = t.get(k), o.get(k)
+        if isinstance(a, float) or isinstance(b, float):
+            if abs(float(a or 0) - float(b or 0)) > 0.5:
+                return True
+        elif a != b:
+            return True
+    return False
+
+
+def composite_bg(tpl: dict) -> QImage:
+    """模板底图：原图为主；改过的字，把原字那一块换成擦干净的底。"""
+    from PySide6.QtGui import QPainter
+    folder = templates_dir() / tpl["id"]
+    orig = QImage(str(folder / "original.png"))
+    clean = QImage(str(folder / "bg.png"))
+    if orig.isNull() or not any("orig" in t for t in tpl.get("texts", [])):
+        return clean            # 旧版模板没有原图信息：用擦干净的底
+    changed = [t for t in tpl["texts"] if "patch" in t and text_changed(t)]
+    if not changed or clean.isNull():
+        return orig
+    out = orig.convertToFormat(QImage.Format.Format_RGB32)
+    p = QPainter(out)
+    for t in changed:
+        x1, y1, x2, y2 = t["patch"]
+        p.drawImage(x1, y1, clean, x1, y1, x2 - x1, y2 - y1)
+    p.end()
+    return out
 
 
 def delete_template(tpl: dict) -> None:

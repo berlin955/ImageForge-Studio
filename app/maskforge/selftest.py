@@ -409,6 +409,7 @@ def run_selftest(log_path: str | None = None) -> int:
         for d in mw.docs:
             d.labels = None
         mw.docs[0].labels, mw.docs[1].labels = ["FACE_FEMALE"], ["BUTTOCKS_EXPOSED"]
+        mw.docs[0].facing, mw.docs[1].facing = 2.0, -2.0
         sp.auto_fill()
         roles = {s["role"]: sp.fills.get(s["id"], {}).get("doc") for s in sp.tpl["slots"]}
         assert roles.get("正面") == mw.docs[0].id and roles.get("背面") == mw.docs[1].id, roles
@@ -418,6 +419,17 @@ def run_selftest(log_path: str | None = None) -> int:
         sp.save_current_template()
         out_img = sp.render_output()
         assert out_img.width() == 1000 and out_img.height() == 1000
+        # 没改过的字保持原图像素；改过的字才擦掉重画
+        from .spec_engine import text_changed
+        tz = next(t for t in sp.tpl["texts"] if "SIZE" in t["text"].upper())
+        assert not text_changed(tz), "没动过的字被当成改过了"
+        assert text_changed(next(t for t in sp.tpl["texts"] if t["text"] == "7039 粉色"))
+        org = QImage(str(tpl_src))
+        dark = min(((org.pixelColor(x, y).lightness(), x, y)
+                    for x in range(int(tz["x"]), int(tz["x"] + tz["w"]), 2)
+                    for y in range(int(tz["y"]), int(tz["y"] + tz["h"]), 2)))
+        assert abs(out_img.pixelColor(dark[1], dark[2]).lightness() - dark[0]) < 12, "原字被改动了"
+        log("keep original text ok")
         sp.name_edit.setText("测试规格图")
         path = sp.export_current()
         assert path and Path(path).exists(), path
