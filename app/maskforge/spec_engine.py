@@ -152,6 +152,7 @@ def find_slots(rgb: np.ndarray, dets: list[dict]) -> list[dict]:
 
 # ================================================================ 找文字、擦文字
 _ocr = None
+last_error = ""   # 最近一次文字识别失败的原因
 
 
 def get_ocr():
@@ -171,9 +172,13 @@ def find_texts(rgb: np.ndarray, slots: list[dict], min_score: float = 0.5):
     H, W = rgb.shape[:2]
     mask = np.zeros((H, W), np.uint8)
     texts = []
+    global last_error
     try:
         result, _ = get_ocr()(rgb[:, :, ::-1].copy())
-    except Exception:
+        last_error = ""
+    except Exception as e:
+        import traceback
+        last_error = f"{e}\n{traceback.format_exc()}"
         result = None
     for item in result or []:
         box, text, score = item[0], item[1], float(item[2])

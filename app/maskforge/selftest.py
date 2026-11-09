@@ -326,6 +326,9 @@ def run_selftest(log_path: str | None = None) -> int:
         tpl = build_template(str(tpl_src), None, "测试规格")
         texts = " | ".join(t["text"] for t in tpl["texts"])
         log(f"spec ocr: {texts}")
+        from . import spec_engine as _se
+        if _se.last_error:
+            log("ocr error: " + _se.last_error)
         assert any("6757" in t["text"] for t in tpl["texts"]), f"没有识别出文字：{texts}"
         from .spec_engine import template_bg
         bgimg = template_bg(tpl)
