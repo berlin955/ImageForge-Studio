@@ -862,6 +862,7 @@ class MainWindow(QMainWindow):
                          float(self.cfg["detect"]["threshold"]), self.get_detector, self)
         w.progress.connect(self._det_progress)
         w.result.connect(self._det_result)
+        self.get_pose()                      # 在界面线程里先加载好，后台线程直接用
         w.get_pose = self.get_pose
         w.facing.connect(self._det_facing)
         w.failed.connect(self._det_failed)
@@ -890,6 +891,7 @@ class MainWindow(QMainWindow):
         w = DetectWorker([(d.id, str(d.path), d.name) for d in targets],
                          float(self.cfg["detect"]["threshold"]), self.get_detector, self)
         w.result.connect(self._det_result)
+        self.get_pose()                      # 在界面线程里先加载好，后台线程直接用
         w.get_pose = self.get_pose
         w.facing.connect(self._det_facing)
         w.failed.connect(self._det_failed)
@@ -919,6 +921,18 @@ class MainWindow(QMainWindow):
                 except Exception:
                     self._pose = None
             return self._pose
+
+    def get_layout(self):
+        """版面分析模型（找设计图里的照片框）。没有模型时返回 None，退回到按边线找。"""
+        if getattr(self, "_layout", "unset") == "unset":
+            self._layout = None
+            try:
+                from .layout_model import LayoutModel, layout_model_path
+                if layout_model_path().exists():
+                    self._layout = LayoutModel(layout_model_path())
+            except Exception:
+                self._layout = None
+        return self._layout
 
     def has_pose(self) -> bool:
         p = getattr(self, "_pose", "unset")

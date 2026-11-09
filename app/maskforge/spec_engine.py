@@ -127,7 +127,7 @@ def _area(r) -> float:
     return max(0.0, r[2] - r[0]) * max(0.0, r[3] - r[1])
 
 
-def find_slots(rgb: np.ndarray, dets: list[dict], blocks: bool = False, text_boxes=()) -> list[dict]:
+def find_slots(rgb: np.ndarray, dets: list[dict], blocks: bool = False, text_boxes=(), layout_boxes=None) -> list[dict]:
     """找出图上所有照片（模特连同照片背景整块），返回图片位列表
     [{"x","y","w","h","shape","radius"}]（原图坐标）。
 
@@ -176,9 +176,42 @@ def find_slots(rgb: np.ndarray, dets: list[dict], blocks: bool = False, text_box
             slots.append({"x": reg["x"], "y": reg["y"], "w": reg["w"], "h": reg["h"],
                           "shape": reg["shape"], "radius": reg["radius"]})
 
-    take_regions(STRICT, only_people=False)
-    if uncovered():
-        take_regions(SENSITIVE, only_people=True)
+    if layout_boxes:
+        # 有版面分析模型：直接用它找到的图片区域，形状参考边缘找到的封闭区域（圆角、胶囊、椭圆）
+        try:
+            hints = find_regions(rgb)
+        except Exception:
+            hints = []
+        for x1, y1, x2, y2, _sc in sorted(layout_boxes, key=lambda b: -(b[2] - b[0]) * (b[3] - b[1])):
+            r = (x1, y1, x2, y2)
+            if _area(r) < 0.01 * W * H:
+                continue
+            if any(_overlap(r, rect_of(s)) > 0.5 * min(_area(r), _area(rect_of(s))) for s in slots):
+                continue
+            shape, rad = "rect", 0.0
+            best = None
+            for g in hints:
+                gr = rect_of(g)
+                inter = _overlap(r, gr)
+                iou = inter / max(1.0, _area(r) + _area(gr) - inter)
+                if iou > 0.75 and (best is None or iou > best[0]):
+                    best = (iou, g)
+            if best:
+                shape, rad = best[1]["shape"], best[1]["radius"]
+            # 贴着整张图边缘的框（差几个像素）直接贴边
+            if x1 < W * 0.012:
+                x1 = 0.0
+            if y1 < H * 0.012:
+                y1 = 0.0
+            if x2 > W * 0.988:
+                x2 = float(W)
+            if y2 > H * 0.988:
+                y2 = float(H)
+            slots.append({"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1, "shape": shape, "radius": rad})
+    else:
+        take_regions(STRICT, only_people=False)
+        if uncovered():
+            take_regions(SENSITIVE, only_people=True)
     people = _cluster_people([{"box": b} for b in uncovered()], W, H)
 
     # 模特不在上面的照片框里：从模特往外扩，找照片的直边
@@ -434,7 +467,7 @@ def rgb_to_qimage(rgb: np.ndarray) -> QImage:
 
 
 # ================================================================ 生成 / 保存模板
-def build_template(path: str, detector, name: str = "", kind: str = "spec", progress=None) -> dict:
+def build_template(path: str, detector, name: str = "", kind: str = "spec", progress=None, layout=None) -> dict:
     """分析一张规格图，生成模板并保存，返回模板数据。"""
     # 这一步在后台线程里跑，全程只用 numpy / OpenCV，不碰 Qt 的图片对象
     import cv2
@@ -457,7 +490,13 @@ def build_template(path: str, detector, name: str = "", kind: str = "spec", prog
         pts = np.array(item[0], dtype=np.float32)
         boxes.append((*pts.min(0), *pts.max(0)))
     say("正在寻找照片边框")
-    slots = find_slots(rgb, dets, blocks=(kind == "detail"), text_boxes=boxes)
+    lboxes = None
+    if layout is not None:
+        try:
+            lboxes = layout.images(rgb)
+        except Exception:
+            lboxes = None
+    slots = find_slots(rgb, dets, blocks=(kind == "detail" and not lboxes), text_boxes=boxes, layout_boxes=lboxes)
     texts, mask = find_texts(rgb, slots, ocr=ocr)
     say("正在擦除原来的文字")
     clean = erase(rgb, mask)

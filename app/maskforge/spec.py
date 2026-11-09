@@ -486,6 +486,7 @@ class TemplateWorker(QThread):
     done = Signal(dict)
     failed = Signal(str)
     stage = Signal(str)
+    layout = None
 
     def __init__(self, path: str, get_detector, kind: str = "spec", parent=None):
         super().__init__(parent)
@@ -498,7 +499,8 @@ class TemplateWorker(QThread):
                 det = self.get_detector()
             except Exception:
                 det = None
-            self.done.emit(build_template(self.path, det, kind=self.kind, progress=self.stage.emit))
+            self.done.emit(build_template(self.path, det, kind=self.kind, progress=self.stage.emit,
+                                          layout=self.layout))
         except Exception as e:
             self.failed.emit(str(e))
 
@@ -891,6 +893,7 @@ class TemplatePage(QWidget):
         self._scan_started = time.monotonic()
         self._update_side()
         w = TemplateWorker(path, self.mw.get_detector, self.kind, self)
+        w.layout = self.mw.get_layout()      # 版面分析模型在界面线程里先加载好
         self._tw = w
         # 注意：后台线程发出的信号要连到界面对象的方法上（会排队到界面线程执行），不能连 lambda
         w.stage.connect(self.scan_status.show_text)
