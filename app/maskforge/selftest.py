@@ -303,26 +303,18 @@ def run_selftest(log_path: str | None = None) -> int:
         from PySide6.QtGui import QFont
         from .spec_engine import build_template, find_slots, load_templates
         tpl_src = tmp / "规格模板.png"
-        tim = QImage(1000, 1000, QImage.Format.Format_RGB32)
-        tim.fill(QColor("#e8e8ea"))
-        tp = QPainter(tim)
-        tp.fillRect(0, 0, 480, 1000, QColor("#806050"))
-        tp.fillRect(540, 280, 380, 560, QColor("#ffffff"))
-        tp.fillRect(560, 300, 340, 520, QColor("#a07060"))
-        tp.fillRect(560, 60, 400, 120, QColor("#111111"))
-        f = QFont("Arial")
-        f.setPixelSize(72)
-        f.setBold(True)
-        tp.setFont(f)
-        tp.setPen(QColor("#ffffff"))
-        tp.drawText(590, 150, "6757 WHITE")
-        f.setPixelSize(44)
-        f.setBold(False)
-        tp.setFont(f)
-        tp.setPen(QColor("#333333"))
-        tp.drawText(600, 920, "SIZE 80-125")
-        tp.end()
-        assert tim.save(str(tpl_src))
+        # 测试环境里 Qt 没有系统字体，文字用 OpenCV 画
+        import cv2
+        import numpy as _np
+        arr = _np.full((1000, 1000, 3), 233, _np.uint8)
+        arr[:, :480] = (80, 96, 128)
+        arr[280:840, 540:920] = 255
+        arr[300:820, 560:900] = (96, 112, 160)
+        arr[60:180, 560:960] = 17
+        cv2.putText(arr, "6757 WHITE", (585, 145), cv2.FONT_HERSHEY_SIMPLEX, 1.9, (255, 255, 255), 5, cv2.LINE_AA)
+        cv2.putText(arr, "SIZE 80-125", (600, 930), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (50, 50, 50), 3, cv2.LINE_AA)
+        ok_, buf = cv2.imencode(".png", arr)
+        buf.tofile(str(tpl_src))
         tpl = build_template(str(tpl_src), None, "测试规格")
         texts = " | ".join(t["text"] for t in tpl["texts"])
         log(f"spec ocr: {texts}")
