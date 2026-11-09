@@ -127,6 +127,7 @@ jobs:
           $d = Join-Path $env:APPDATA "ImageForge Studio\models"
           New-Item -ItemType Directory -Force -Path $d | Out-Null
           gh release download models-v1 -R ${{ github.repository }} -p layout.onnx -D $d --clobber
+          gh release download models-v1 -R ${{ github.repository }} -p lama.onnx -D $d --clobber
           Write-Host ("layout model: " + (Get-Item (Join-Path $d "layout.onnx")).Length + " bytes")
 
       - name: 自检（源码）

@@ -12,6 +12,20 @@ import numpy as np
 SIZE = 512
 
 
+MODEL_SHA256 = ""      # 模型上传后填上
+MODEL_SIZE = 0
+
+
+def model_url() -> str:
+    from . import REPO
+    return f"https://github.com/{REPO}/releases/download/models-v1/lama.onnx"
+
+
+def downloaded_path() -> Path:
+    from .config import data_dir
+    return data_dir() / "models" / "lama.onnx"
+
+
 def inpaint_model_path() -> Path:
     from .config import data_dir, resource_dir
     p = resource_dir() / "models" / "lama.onnx"

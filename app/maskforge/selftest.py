@@ -532,7 +532,10 @@ def run_selftest(log_path: str | None = None) -> int:
             zh_src = tmp / "中文规格.png"
             pim.save(str(zh_src))
             log(f"layout model: {mw.get_layout() is not None}")
-            ztpl = build_template(str(zh_src), mw.get_detector(), "中文规格", layout=mw.get_layout())
+            log(f"inpainter: {mw.get_inpainter() is not None}")
+            ztpl = build_template(str(zh_src), mw.get_detector(), "中文规格", layout=mw.get_layout(),
+                                  inpainter=mw.get_inpainter())
+            log(f"zh keep layers: {[bool(s.get('keep')) for s in ztpl['slots']]}")
             zt = " | ".join(t["text"] for t in ztpl["texts"])
             log(f"zh ocr: {zt} (raw {ztpl.get('ocr_raw')}, err {ztpl.get('ocr_error')!r})")
             log(f"zh slots: {[(int(s['x']), int(s['y']), int(s['w']), int(s['h']), s.get('radius')) for s in ztpl['slots']]}")
