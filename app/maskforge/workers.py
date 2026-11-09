@@ -18,6 +18,7 @@ class DetectWorker(QThread):
         self.threshold = threshold
         self.get_detector = get_detector
         self.get_pose = None                 # 可选：姿态模型，用来判断正面 / 背面
+        self.pose_error = ""
 
     def run(self):
         n = len(self.items)
@@ -42,18 +43,20 @@ class DetectWorker(QThread):
                 continue
             self.result.emit(did, img.width(), img.height(), dets)
             if self.get_pose:
+                from .pose import facing_score
+                labels = [x["label"] for x in dets]
+                sc = facing_score(None, labels)
                 try:
                     pose = self.get_pose()
                     if pose is not None:
                         from .detector import qimage_to_rgb
-                        from .pose import facing_score
                         small = img if max(img.width(), img.height()) <= 1280 else img.scaled(
                             1280, 1280, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                         kp = pose.keypoints(qimage_to_rgb(small))
-                        sc = facing_score(kp, [x["label"] for x in dets], float(small.width()))
-                        self.facing.emit(did, float(sc))
-                except Exception:
-                    pass
+                        sc = facing_score(kp, labels, float(small.width()))
+                except Exception as e:
+                    self.pose_error = str(e)
+                self.facing.emit(did, float(sc))   # 姿态模型出问题也照样给结果（只按部位判断），不会卡住
         self.progress.emit(n, n, "")
 
 

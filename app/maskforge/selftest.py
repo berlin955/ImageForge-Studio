@@ -269,6 +269,9 @@ def run_selftest(log_path: str | None = None) -> int:
             if not mw.busy:
                 break
             QTest.qWait(100)
+        if mw.busy:
+            log(f"busy: worker={type(mw._worker).__name__ if mw._worker else None} "
+                f"pose_err={getattr(mw._worker, 'pose_error', '')!r}")
         assert not mw.busy, "后台识别人物位置没有结束"
         assert all(d.subject is not None for d in mw.docs), "没有识别出人物位置"
         log("subject analysis ok")

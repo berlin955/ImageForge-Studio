@@ -921,8 +921,11 @@ class MainWindow(QMainWindow):
             return self._pose
 
     def has_pose(self) -> bool:
-        from .pose import pose_model_path
-        return pose_model_path().exists()
+        p = getattr(self, "_pose", "unset")
+        if p == "unset":
+            from .pose import pose_model_path
+            return pose_model_path().exists()
+        return p is not None
 
     def _det_facing(self, did, score):
         d = self.doc_by_id(did)
