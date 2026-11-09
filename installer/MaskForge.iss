@@ -1,8 +1,8 @@
-﻿; 智能打码工坊 安装脚本（Inno Setup 6）
+﻿; 智图工坊 安装脚本（Inno Setup 6）
 #ifndef MyAppVersion
   #define MyAppVersion "1.0.0"
 #endif
-#define MyAppName "智能打码工坊"
+#define MyAppName "智图工坊"
 #define MyAppExe "MaskForge.exe"
 #define MyRepo "https://github.com/berlin955/MaskForge-Studio"
 
@@ -15,13 +15,13 @@ AppPublisher=berlin955
 AppPublisherURL={#MyRepo}
 AppSupportURL={#MyRepo}/issues
 AppUpdatesURL={#MyRepo}/releases
-DefaultDirName={localappdata}\Programs\MaskForge Studio
+DefaultDirName={localappdata}\Programs\ImageForge Studio
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 DisableDirPage=auto
 PrivilegesRequired=lowest
 OutputDir=..\dist-installer
-OutputBaseFilename=MaskForge-Studio-Setup-{#MyAppVersion}
+OutputBaseFilename=ImageForge-Studio-Setup-{#MyAppVersion}
 SetupIconFile=..\assets\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExe}
 UninstallDisplayName={#MyAppName}
@@ -47,6 +47,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [InstallDelete]
 Type: filesandordirs; Name: "{app}\_internal"
+; 旧名字「智能打码工坊」的快捷方式
+Type: files; Name: "{autodesktop}\智能打码工坊.lnk"
+Type: files; Name: "{autoprograms}\智能打码工坊.lnk"
 
 [Files]
 Source: "..\dist\MaskForge\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

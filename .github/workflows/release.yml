@@ -138,12 +138,12 @@ jobs:
           if ($isl) { $isccArgs += "/DChineseIsl=$isl"; Write-Host "language: $isl" }
           & $iscc @isccArgs "installer\MaskForge.iss"
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          Compress-Archive -Path "dist\MaskForge\*" -DestinationPath "dist-installer\MaskForge-Studio-Portable-$env:APP_VERSION.zip"
+          Compress-Archive -Path "dist\MaskForge\*" -DestinationPath "dist-installer\ImageForge-Studio-Portable-$env:APP_VERSION.zip"
           Get-ChildItem dist-installer
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MaskForge-Studio-${{ env.APP_VERSION }}
+          name: ImageForge-Studio-${{ env.APP_VERSION }}
           path: dist-installer/*
           retention-days: 14
 
@@ -163,7 +163,7 @@ jobs:
             if ($LASTEXITCODE -eq 0) {
               gh release upload $tag $files --clobber
             } else {
-              gh release create $tag $files --target "${{ github.sha }}" --title "智能打码工坊 v$env:APP_VERSION" --notes-file notes.md
+              gh release create $tag $files --target "${{ github.sha }}" --title "智图工坊 v$env:APP_VERSION" --notes-file notes.md
             }
             if ($LASTEXITCODE -eq 0) { $done = $true } else { Write-Host "release attempt $i failed, retrying"; Start-Sleep -Seconds (15 * $i) }
           }

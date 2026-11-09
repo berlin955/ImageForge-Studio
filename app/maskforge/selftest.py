@@ -242,6 +242,56 @@ def run_selftest(log_path: str | None = None) -> int:
         mw.side.refresh()
         assert mw.side.s_layer.isVisibleTo(mw.side), "选中码后应显示码的属性"
         log("preview / stickers ok")
+        # ---- 智图工坊：功能栏、素材页、批量主图 ----
+        for key in mw.page_keys:
+            mw.show_page(key)
+            app.processEvents()
+        mw.show_page("assets")
+        mw.assets_page.refresh()
+        assert mw.assets_page.grid.count() == len(mw.docs), "素材页图片数量不对"
+        from .mainimage import compose, crop_rect_aspect
+        d0 = mw.docs[0]
+        d0.subject, d0.face = (300.0, 200.0, 900.0, 1500.0), (520.0, 220.0, 680.0, 400.0)
+        r = crop_rect_aspect(d0, 1200, 1600, 1.0, "smart", {})
+        assert abs(r.width() - 1200) < 1 and r.y() < 400, f"智能裁切位置不对：{r}"
+        r2 = crop_rect_aspect(d0, 1200, 1600, 0.5, "smart", {"cx": 0.5, "cy": 0.5, "scale": 0.5})
+        assert abs(r2.width() / r2.height() - 0.5) < 1e-6, r2
+        mp = mw.main_page
+        mp._force = True
+        mc = mw.cfg["mainimg"]
+        logo_file = tmp / "logo.png"
+        lg = QImage(300, 120, QImage.Format.Format_ARGB32)
+        lg.fill(QColor(220, 30, 80, 200))
+        assert lg.save(str(logo_file))
+        mc["logo"].update(enabled=True, file=str(logo_file))
+        for size, mode in ((800, "smart"), (1000, "center"), (1440, "pad")):
+            mc.update(size=size, mode=mode, layout="single")
+            img, cells, lr = compose(mc, [(d0, {})], None, lib, size, preview=False)
+            assert img.width() == size and img.height() == size, (img.width(), size)
+            assert lr is not None and lr.x() < size * 0.2 and lr.y() < size * 0.2, f"角标不在左上角：{lr}"
+        img, cells, lr = compose(mc, [(d0, {})], (0.6, 0.7), lib, 800, preview=False)
+        assert abs(lr.x() - 480) < 2 and abs(lr.y() - 560) < 2, f"单张手动挪角标无效：{lr}"
+        mc.update(layout="collage", mode="smart", cells=2, gap=10)
+        mp.auto_group()
+        assert mp.groups and len(mp.groups[0]["docs"]) == 2, mp.groups
+        for n in (2, 3, 4):
+            items = [(mw.docs[i % len(mw.docs)], {}) for i in range(n)]
+            img, cells, lr = compose(mc, items, None, lib, 1000, preview=True)
+            assert len(cells) == n and img.width() == 1000, (len(cells), img.width())
+            assert all(c[0].height() > c[0].width() for c in cells), "竖格拼图的格子应该是竖长的"
+        mp.refresh()
+        mw.cfg["export"]["dir"] = str(tmp / "out")
+        mw.cfg["export"]["open_after"] = False
+        n_ok = mp._export(mp.targets())
+        files = list((tmp / "out" / "主图").glob("*"))
+        assert n_ok == len(mp.targets()) and files, (n_ok, files)
+        mc.update(layout="single")
+        n_ok = mp._export(mp.targets())
+        files = sorted((tmp / "out" / "主图").glob("*"))
+        back = QImage(str(files[-1]))
+        assert back.width() == 800 or back.width() == mc["size"], back.width()
+        log(f"main image ok: {len(files)} files")
+        mw.show_page("mask")
         from .settings import SettingsDialog
         dlg = SettingsDialog(mw)
         dlg.close()

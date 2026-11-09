@@ -35,9 +35,17 @@ def resource_dir() -> Path:
 
 
 def data_dir() -> Path:
-    """用户数据目录：%APPDATA%/MaskForge Studio"""
-    base = os.environ.get("APPDATA") or str(Path.home() / ".config")
-    p = Path(base) / "MaskForge Studio"
+    """用户数据目录：%APPDATA%/ImageForge Studio（旧版的 MaskForge Studio 会自动搬过来）"""
+    base = Path(os.environ.get("APPDATA") or str(Path.home() / ".config"))
+    p = base / "ImageForge Studio"
+    if not p.exists():
+        old = base / "MaskForge Studio"
+        if old.exists():
+            try:
+                import shutil
+                shutil.copytree(old, p)
+            except Exception:
+                pass
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -55,7 +63,7 @@ def icon_path() -> Path:
     return resource_dir() / "assets" / "icon.png"
 
 
-CONFIG_VERSION = 4
+CONFIG_VERSION = 5
 
 DEFAULTS: dict = {
     "config_version": CONFIG_VERSION,
@@ -78,6 +86,20 @@ DEFAULTS: dict = {
                    "color": "#16171b", "block": 0.012, "scale": 0.5, "opacity": 1.0},
         "custom": {"enabled": True, "style": "blur", "sticker": "builtin:star",
                    "color": "#16171b", "block": 0.02, "scale": 1.0, "opacity": 1.0},
+    },
+    "mainimg": {
+        "size": 800,
+        "custom": 1200,
+        "mode": "smart",          # smart 智能裁切 | center 居中裁切 | pad 留白不裁
+        "pad_color": "#ffffff",
+        "layout": "single",       # single 单张 | collage 竖格拼图
+        "cells": 2,
+        "gap": 8,
+        "bg": "#ffffff",
+        "format": "jpg",
+        "suffix": "_主图",
+        "folder": "主图",
+        "logo": {"enabled": False, "file": "", "size": 0.2, "margin": 0.03, "opacity": 1.0, "corner": "tl"},
     },
     "export": {
         "dir": "",

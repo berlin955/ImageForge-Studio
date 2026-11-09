@@ -540,6 +540,23 @@ class MainWindow(QMainWindow):
         self.cur = -1
         self.go(min(i, len(self.docs) - 1))
 
+    def remove_docs(self, ids: set):
+        if self.busy or not ids:
+            return
+        keep = []
+        for i in range(len(self.docs) - 1, -1, -1):
+            d = self.docs[i]
+            if d.id in ids:
+                IMAGE_CACHE.drop(d.id)
+                self.docs.pop(i)
+                self.film.blockSignals(True)
+                self.film.takeItem(i)
+                self.film.blockSignals(False)
+        self.cur = -1
+        if hasattr(self, "main_page"):
+            self.main_page.forget(ids)
+        self.go(0)
+
     def clear_all(self):
         if not self.docs or self.busy:
             return
@@ -800,6 +817,7 @@ class MainWindow(QMainWindow):
             else:
                 self.status.showMessage("没有需要识别的图片", 4000)
             return
+        self._analyze = False
         self._replace = mode in ("all", "current")
         self._after_detect = then
         self._det_found = 0
@@ -816,6 +834,31 @@ class MainWindow(QMainWindow):
         self._worker = w
         w.start()
 
+    def analyze_subjects(self, then=None):
+        """只识别人物位置（给主图智能裁切用），不打码。"""
+        if self.busy:
+            return
+        targets = [d for d in self.docs if d.subject is None and not d.error and not d.detected]
+        if not targets:
+            if then:
+                then()
+            return
+        self._analyze = True
+        self._replace = False
+        self._after_detect = then
+        self._det_found = 0
+        self._det_docs = len(targets)
+        self.set_busy(True)
+        w = DetectWorker([(d.id, str(d.path), d.name) for d in targets],
+                         float(self.cfg["detect"]["threshold"]), self.get_detector, self)
+        w.result.connect(self._det_result)
+        w.failed.connect(self._det_failed)
+        w.fatal.connect(self._det_fatal)
+        w.finished.connect(self._det_finished)
+        self._worker = w
+        self.status.showMessage(f"正在识别 {len(targets)} 张图的人物位置…", 4000)
+        w.start()
+
     def stop_detect(self):
         if self._worker:
             self._worker.requestInterruption()
@@ -830,6 +873,10 @@ class MainWindow(QMainWindow):
             return
         d.w, d.h = w, h
         d.subject, d.face = subject_of(dets)
+        if getattr(self, "_analyze", False):
+            if d.subject is None:
+                d.subject = (0.0, 0.0, float(w), float(h))
+            return
         layers = plan_layers(dets, w, h, self.cfg)
         if self._replace or not d.layers:
             d.push()
@@ -859,7 +906,11 @@ class MainWindow(QMainWindow):
         self._worker = None
         self.set_busy(False)
         self.side.set_progress(0, 0, "")
-        self.status.showMessage(f"识别完成：{self._det_docs} 张图片，共 {self._det_found} 个码", 8000)
+        if getattr(self, "_analyze", False):
+            self._analyze = False
+            self.status.showMessage("人物位置识别完成", 5000)
+        else:
+            self.status.showMessage(f"识别完成：{self._det_docs} 张图片，共 {self._det_found} 个码", 8000)
         self.refresh_all()
         then, self._after_detect = self._after_detect, None
         if then:

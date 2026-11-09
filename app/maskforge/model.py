@@ -105,6 +105,8 @@ class ImageDoc:
         self.subject: tuple | None = None    # AI 识别到的人物范围（原图坐标）
         self.face: tuple | None = None       # 脸的位置，用于主图裁切
         self.crop: dict | None = None        # 手动调整过的主图框 {cx, cy, scale}，按比例记录
+        self.logo_pos: tuple | None = None   # 主图角标手动拖过的位置（按输出比例）
+        self.icon = None                     # 缩略图图标（带码），各页面共用
         self.error = ""
         self.hist: list[list[dict]] = []
         self.fut: list[list[dict]] = []

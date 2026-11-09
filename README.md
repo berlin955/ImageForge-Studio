@@ -1,12 +1,12 @@
-# 智能打码工坊 MaskForge Studio
+# 智图工坊 ImageForge Studio
 
-给模特图片批量打码的 Windows 桌面软件。AI 在本机自动识别下体、股沟、乳晕，按你设定的样式贴码，审核微调后批量调整尺寸并保存。
+电商出图的 Windows 桌面软件：AI 智能打码、批量主图（裁切 / 拼图 / 品牌角标），后续加入智能规格、智能详情、批量水印。
 
 作者：**berlin955**
 
 ## 下载安装
 
-到 [Releases](https://github.com/berlin955/MaskForge-Studio/releases/latest) 下载 `MaskForge-Studio-Setup-x.y.z.exe`，双击安装即可（不需要管理员权限）。
+到 [Releases](https://github.com/berlin955/MaskForge-Studio/releases/latest) 下载 `ImageForge-Studio-Setup-x.y.z.exe`，双击安装即可（不需要管理员权限）。
 也提供免安装的 `Portable.zip`，解压后运行 `MaskForge.exe`。
 
 软件每次启动会检查 GitHub 上有没有新版本，有的话提示「立即更新」，自动下载安装并重新打开。
