@@ -425,6 +425,11 @@ def run_selftest(log_path: str | None = None) -> int:
         assert not sp.scanning, "导入动画没有结束"
         assert sp.tpl and len(sp.tpl["slots"]) == 2 and len(load_templates("spec")) == n_before + 1, sp.tpl
         log(f"scan animation ok: {frames} frames, {_time.monotonic() - t_start:.1f}s")
+        assert sp.in_review() and not sp.film_bar.isVisibleTo(sp), "识别完应该先显示识别结果"
+        sp.view.grab()
+        sp.confirm_review()
+        assert not sp.in_review() and sp.film_bar.isVisibleTo(sp) and sp.tpl.get("confirmed")
+        log("review step ok")
         # ---- 中文文字识别（仿真实规格图：米色底、深色标题框、胶囊相框）----
         import os as _os
         font_file = next((f for f in (r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simsun.ttc",

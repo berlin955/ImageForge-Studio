@@ -167,13 +167,29 @@ class SlotItem(QGraphicsObject):
                 p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
                 p.drawImage(r, self._cache)
         elif not self.page.exporting:
-            # 原来的照片已经抠掉：显示成空位
-            p.fillPath(path, QColor(pal["card2"]))
+            # 原来的照片已经抠掉：画成透明格子（和修图软件里的「透明」一样）
+            cell = max(6.0, 9.0 / max(0.05, self.page.view_scale()))
+            p.fillPath(path, QColor("#f4f4f4"))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor("#d6d6d6"))
+            nx, ny = int(r.width() / cell) + 1, int(r.height() / cell) + 1
+            for j in range(ny):
+                for i in range(j % 2, nx, 2):
+                    p.drawRect(QRectF(i * cell, j * cell, cell, cell))
+            idx = next((i for i, s in enumerate(self.page.tpl["slots"]) if s is self.slot), 0) + 1 \
+                if self.page.tpl else 1
             f2 = QFont(DEFAULT_FONT)
-            f2.setPixelSize(max(10, int(min(r.width(), r.height()) * 0.06)))
+            f2.setPixelSize(max(10, int(min(r.width(), r.height()) * 0.07)))
+            f2.setBold(True)
             p.setFont(f2)
-            p.setPen(QColor(pal["fg"]))
-            p.drawText(r, Qt.AlignmentFlag.AlignCenter, f"{self.slot.get('role', '图片')}\n点一下，再点下面的图片填入")
+            tip = f"照片位 {idx}\n已抠空" if self.page.in_review() else \
+                f"{self.slot.get('role', '图片')}\n点一下，再点下面的图片填入"
+            box = QRectF(r.center().x() - r.width() * 0.42, r.center().y() - f2.pixelSize() * 1.6,
+                         r.width() * 0.84, f2.pixelSize() * 3.2)
+            p.setBrush(QColor(20, 22, 30, 170))
+            p.drawRoundedRect(box, f2.pixelSize() * 0.5, f2.pixelSize() * 0.5)
+            p.setPen(QColor("#ffffff"))
+            p.drawText(box, Qt.AlignmentFlag.AlignCenter, tip)
         p.restore()
         if self.page.exporting:
             return
@@ -327,6 +343,14 @@ class TextItem(QGraphicsObject):
 
     def paint(self, p: QPainter, opt, widget=None):
         draw_text(p, self.t, QPointF(0, 0))
+        if self.page.in_review() and not self.isSelected() and not self.page.exporting:
+            c = QColor(theme.current()["accent"])
+            pen = QPen(c, 1.3, Qt.PenStyle.DashLine)
+            pen.setCosmetic(True)
+            p.setPen(pen)
+            c.setAlphaF(0.12)
+            p.setBrush(c)
+            p.drawRect(self.boundingRect())
         if self.isSelected() and not self.page.exporting:
             pen = QPen(QColor(theme.current()["accent"]), 1.5, Qt.PenStyle.DashLine)
             pen.setCosmetic(True)
@@ -572,6 +596,7 @@ class TemplatePage(QWidget):
         wv.addWidget(self.stack, 1)
 
         fb = QFrame()
+        self.film_bar = fb
         fb.setObjectName("FilmBar")
         fv = QVBoxLayout(fb)
         fv.setContentsMargins(10, 6, 10, 2)
@@ -607,6 +632,23 @@ class TemplatePage(QWidget):
             it.update()
 
     def _build_side(self):
+        cr = Card("识别结果")
+        self.review_card = cr
+        self.review_sum = QLabel("")
+        self.review_sum.setWordWrap(True)
+        self.review_sum.setStyleSheet("font-size:15px;font-weight:600;")
+        cr.add(self.review_sum)
+        cr.add(muted("右边是处理后的样子：格子花纹的地方是已经抠空的照片位（模特连同照片背景），"
+                     "虚线框是识别出来的文字，原来的字已经擦掉，下面「文字」里可以直接改内容和字体。\n"
+                     "按住上方「看原图」可以对比。"))
+        b_adj = button("调整识别结果", "", "拖动照片位的边角改范围，或在空白处拖出漏掉的照片位")
+        b_adj.clicked.connect(lambda: self.b_edit.setChecked(not self.b_edit.isChecked()))
+        b_redo = button("重新识别", "Ghost")
+        b_redo.clicked.connect(self.rescan)
+        cr.add(row(b_adj, None, b_redo))
+        b_ok = button("没问题，下一步：填入素材", "Primary")
+        b_ok.clicked.connect(self.confirm_review)
+        cr.add(b_ok)
         c0 = Card("用哪个版本的图")
         self.mask_seg = Segmented([("1", "打码后的图"), ("0", "原图（不打码）")])
         self.mask_seg.changed.connect(self._mask_changed)
@@ -707,10 +749,51 @@ class TemplatePage(QWidget):
         self.name_edit.setPlaceholderText(f"文件名，例如 6757白色{self.info['suffix']}")
         c4.add(self.name_edit)
 
-        area, _ = scroll_page(c0, c1, c2, c3, c4)
+        self.fill_cards = (c0, c2, c4)
+        area, _ = scroll_page(cr, c0, c1, c2, c3, c4)
         self.fmt.set_value(self.sc.get("format", "jpg"))
         self.mask_seg.set_value("1" if self.sc.get("use_mask", True) else "0")
         return area
+
+    # ---------------------------------------------------------------- 识别结果确认
+    def in_review(self) -> bool:
+        return bool(self.tpl) and not self.tpl.get("confirmed", True)
+
+    def _apply_review_ui(self):
+        if not hasattr(self, "film_bar") or not hasattr(self, "review_card"):
+            return
+        rv = self.in_review()
+        self.review_card.setVisible(rv)
+        for c in self.fill_cards:
+            c.setVisible(not rv)
+        self.film_bar.setVisible(not rv)
+        if rv:
+            n_s, n_t = len(self.tpl["slots"]), len(self.tpl["texts"])
+            self.review_sum.setText(f"抠空了 {n_s} 个照片位，识别出 {n_t} 段文字")
+
+    def confirm_review(self):
+        if not self.tpl:
+            return
+        self.tpl["confirmed"] = True
+        if self.b_edit.isChecked():
+            self.b_edit.setChecked(False)
+        save_template(self.tpl)
+        self.dirty = False
+        self.reload_templates(select=self.tpl["id"])
+        if self.mw.docs:
+            self.auto_fill()
+        self.mw.status.showMessage("模板已保存。点照片位再点下面的素材可以换图；拖动调位置，滚轮缩放。", 10000)
+
+    def rescan(self):
+        if not self.tpl:
+            return
+        from .spec_engine import templates_dir
+        src = templates_dir() / self.tpl["id"] / "original.png"
+        if not src.exists():
+            QMessageBox.warning(self, "重新识别", "找不到这个模板的原图。")
+            return
+        old = self.tpl
+        self.start_scan(str(src), replace=old)
 
     def _save_sc(self, k, v):
         self.sc[k] = v
@@ -756,7 +839,7 @@ class TemplatePage(QWidget):
         self.start_scan(f)
 
     # ---------------------------------------------------------------- 导入动画
-    def start_scan(self, path: str):
+    def start_scan(self, path: str, replace: dict | None = None):
         from .model import load_qimage
         from .scanfx import ScanOverlay, ScanStatus
         img = load_qimage(path)
@@ -764,6 +847,9 @@ class TemplatePage(QWidget):
             QMessageBox.warning(self, "导入失败", "读取不了这张图片")
             return
         self.scanning = True
+        self._scan_replace = replace
+        if self.b_edit.isChecked():
+            self.b_edit.setChecked(False)
         self.set_edit_mode(False)
         self.tpl = None
         sc = self.view.scene()
@@ -813,11 +899,13 @@ class TemplatePage(QWidget):
         self.scanning = False
         self._scan.stop()
         self.scan_status.finish()
+        old = getattr(self, "_scan_replace", None)
+        if old and old.get("id") != tpl["id"]:
+            tpl["name"] = old.get("name", tpl["name"])
+            save_template(tpl)
+            delete_template(old)
+        self._scan_replace = None
         self.reload_templates(select=tpl["id"])
-        self.b_edit.setChecked(True)
-        self.mw.status.showMessage(
-            f"模板已生成：{len(tpl['slots'])} 个图片位、{len(tpl['texts'])} 段文字。"
-            "检查一下图片位，不对的拖动边角调整，没问题后点「保存模板」。", 12000)
 
     def _scan_failed(self, msg: str):
         self.scanning = False
@@ -1120,6 +1208,7 @@ class TemplatePage(QWidget):
 
     # ---------------------------------------------------------------- 左侧状态
     def _update_side(self):
+        self._apply_review_ui()
         tpl = self.tpl
         self.title.setText(f"{tpl.get('name')}　{tpl['w']}×{tpl['h']}" + ("　·　未保存" if self.dirty else "")
                            if tpl else "")

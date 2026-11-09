@@ -468,7 +468,7 @@ def build_template(path: str, detector, name: str = "", kind: str = "spec", prog
     tpl = {"id": tid, "kind": kind, "name": name or Path(path).stem, "w": W, "h": H,
            "slots": slots, "texts": texts,
            "ocr_error": (last_error.strip().splitlines() or [""])[-1][:300] if last_error else "",
-           "ocr_raw": len(ocr)}
+           "ocr_raw": len(ocr), "confirmed": False}
     save_template(tpl)
     return tpl
 
