@@ -250,6 +250,265 @@ def corner_radius(grad, x0, y0, x1, y1, fixed):
     return 0.0 if ratio < 0.02 else float(min(0.5, ratio))
 
 
+def snap_sides(rgb: np.ndarray, x: float, y: float, w: float, h: float, fixed=None, reach: int | None = None):
+    """在原图全分辨率下，逐条边找「真正的照片边」，精确到亚像素。
+    每条边只看中间 70% 那一段（避开圆角），沿垂直方向前后搜索：
+      · 这条线本身要清楚（两侧颜色差得多）；
+      · 线的外侧要是均匀的边框 / 底色（照片里面的线条，比如窗帘褶皱、门框，外侧还是照片纹理，会被排除）；
+    再用抛物线插值求亚像素位置。"""
+    import cv2
+    H, W = rgb.shape[:2]
+    if fixed is None:
+        fixed = [x <= 0.5, y <= 0.5, x + w >= W - 0.5, y + h >= H - 0.5]
+    if reach is None:
+        reach = int(max(8, min(w, h) * 0.04))
+    lab = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2LAB).astype(np.float32)
+    out = [x, y, x + w, y + h]
+    band_info = []
+    for side in range(4):
+        if fixed[side]:
+            continue
+        vertical = side in (0, 2)              # 左右两条边是竖线
+        outward = -1 if side in (0, 1) else 1  # 左、上边的外侧在坐标小的一边
+        pos = out[side]
+        lo, hi = (out[1], out[3]) if vertical else (out[0], out[2])
+        a = int(lo + (hi - lo) * 0.15)
+        b = int(hi - (hi - lo) * 0.15)
+        if b - a < 8:
+            continue
+        lim = H if not vertical else W
+
+        def line(p):
+            if p < 0 or p >= lim:
+                return None
+            return lab[a:b, p] if vertical else lab[p, a:b]
+
+        scores = []
+        edges = []
+        offs = list(range(-reach, reach + 1))
+        for o in offs:
+            p = int(round(pos)) + o
+            # 照片边界在像素 p 的起点（左 / 上边）或终点（右 / 下边）：外侧像素和内侧像素
+            p_in = p if outward < 0 else p - 1
+            p_out = p - 1 if outward < 0 else p
+            li, lo_ = line(p_in), line(p_out)
+            if li is None or lo_ is None:
+                scores.append(-1e9)
+                edges.append(0.0)
+                continue
+            edge = float(np.median(np.abs(li - lo_).sum(1)))
+            edges.append(edge)
+            # 外侧 3 个像素宽的条带是不是均匀
+            strip = [line(p_out + outward * k) for k in range(0, 3)]
+            strip = [v for v in strip if v is not None]
+            if strip:
+                st = np.concatenate(strip, 0)
+                unif = float(np.median(np.abs(st - np.median(st, 0)).sum(1)))
+            else:
+                unif = 0.0
+            scores.append(edge - 1.5 * unif)
+        sc = np.array(scores)
+        best = float(sc.max())
+        if best < 12:
+            continue                           # 找不到清楚的边，不动
+        k = int(sc.argmax())
+        # 最强的那条线往里如果还有一条清楚的线，而且两条线之间是一条颜色均匀的带子（边框 / 描边），
+        # 照片要贴在里侧那条线上（照片里的线条，比如窗帘褶皱，和边框之间是照片纹理，不是均匀的带子）
+        base = int(round(pos))
+        for i in sorted(range(len(offs)), key=lambda i: -(-offs[i] * outward)):
+            if -offs[i] * outward <= -offs[k] * outward:
+                break                          # 只看比最强那条更靠里的
+            # 这里只看线本身清不清楚（细边框外侧 3 像素里混着边框和底色，不能按「外侧均匀」扣分）
+            if edges[i] < max(12.0, edges[k] * 0.15):
+                continue
+            p_i, p_k = base + offs[i], base + offs[k]
+            lo_p, hi_p = sorted((p_i, p_k))
+            if hi_p - lo_p > max(3, min(w, h) * 0.035):
+                continue                       # 边框带子不会太宽（太宽的多半是照片里的白墙之类）
+            band = [line(q) for q in range(lo_p, hi_p)]
+            band = [v for v in band if v is not None]
+            if len(band) < 1:
+                continue
+            # 每一行自己颜色均匀就算（白线 + 抗锯齿过渡这种几行不同色的也行）
+            devs = [float(np.median(np.abs(v - np.median(v, 0)).sum(1))) for v in band]
+            if float(np.median(devs)) < 10:
+                k = i
+                break
+        frac = 0.0
+        # 设计图里的边几乎都对齐整像素：边很清楚（两边相邻位置都弱得多）就直接取整；
+        # 只有边是糊的（缩放过的图）才用抛物线插值求亚像素位置
+        if 0 < k < len(edges) - 1:
+            l_, c_, r_ = edges[k - 1], edges[k], edges[k + 1]
+            # 真正糊的边两侧都有渐变；只有一侧强（旁边紧挨着另一条硬边，比如 1 像素描边）不算，直接取整
+            if min(l_, r_) > c_ * 0.3 and max(l_, r_) < c_:
+                den = l_ - 2 * c_ + r_
+                if den < 0:
+                    frac = float(np.clip(0.5 * (l_ - r_) / den, -0.5, 0.5))
+        out[side] = int(round(pos)) + offs[k] + frac
+        # 记下这条边剥掉的边框带子（颜色、粗细），给另外几条边参考
+        k0 = int(sc.argmax())
+        if k != k0:
+            lo_p, hi_p = sorted((base + offs[k], base + offs[k0]))
+            bl = [line(q) for q in range(lo_p, hi_p)]
+            bl = [v for v in bl if v is not None]
+            if bl:
+                band_info.append((np.median(np.concatenate(bl, 0), 0), hi_p - lo_p))
+    # 同一个相框的描边四边一样粗：有的边量到了描边，另外的边如果紧贴内侧也是同样颜色、同样粗细的一条，也剥掉
+    if band_info:
+        bcol = np.median(np.array([b[0] for b in band_info]), 0)
+        bt = int(round(np.median([b[1] for b in band_info])))
+        for side in range(4):
+            if fixed[side] or bt < 1:
+                continue
+            vertical = side in (0, 2)
+            inward = 1 if side in (0, 1) else -1
+            lo, hi = (out[1], out[3]) if vertical else (out[0], out[2])
+            a = int(lo + (hi - lo) * 0.15)
+            b = int(hi - (hi - lo) * 0.15)
+            p0 = int(round(out[side])) if inward > 0 else int(round(out[side])) - 1
+            ok = True
+            for t in range(bt):
+                q = p0 + inward * t
+                if not (0 <= q < (W if vertical else H)):
+                    ok = False
+                    break
+                ln = lab[a:b, q] if vertical else lab[q, a:b]
+                if float(np.median(np.abs(ln - bcol).sum(1))) > 30:
+                    ok = False
+                    break
+            if ok:
+                out[side] += inward * bt
+    return out[0], out[1], out[2] - out[0], out[3] - out[1]
+
+
+def corner_radii(rgb: np.ndarray, x: float, y: float, w: float, h: float):
+    """逐个角量圆角半径（像素）。返回 [左上, 右上, 左下, 右下]，量不了的是 None。
+    从角尖沿对角线往里走：
+      · 先可能经过角尖外面的底色（圆角外面那一小块），
+      · 再经过边框色（紧贴照片边外侧那种颜色，比如白边），
+      · 穿过边框后遇到的第一个别的颜色就是照片（哪怕照片的颜色和底色一样，也不会弄错）。
+    走过的距离 d 和圆角半径 r 的关系：d = r·(1 − 1/√2)。"""
+    H, W = rgb.shape[:2]
+    img = rgb.astype(np.float32)
+    side = min(w, h)
+    reach = int(side * 0.16) + 2
+    X0, Y0, X1, Y1 = x, y, x + w, y + h
+    res = []
+    for cx, cy, sx, sy in ((X0, Y0, 1, 1), (X1 - 1, Y0, -1, 1), (X0, Y1 - 1, 1, -1), (X1 - 1, Y1 - 1, -1, -1)):
+        if (sx > 0 and X0 <= 0.5) or (sx < 0 and X1 >= W - 0.5) or (sy > 0 and Y0 <= 0.5) or (sy < 0 and Y1 >= H - 0.5):
+            res.append(None)               # 贴着整张图边缘：不可能是圆角
+            continue
+        oy = int(round(cy - sy))
+        xs = [int(round(cx + sx * k)) for k in range(int(side * 0.2), int(side * 0.3))]
+        xs = [v for v in xs if 0 <= v < W]
+        if not (0 <= oy < H) or len(xs) < 3:
+            res.append(None)
+            continue
+        frame = np.median(img[oy, xs], axis=0)          # 紧贴照片边外侧的颜色（边框 / 底色）
+        tips = [img[int(round(cy - sy * k)), int(round(cx - sx * k))] for k in range(1, 4)
+                if 0 <= cx - sx * k < W and 0 <= cy - sy * k < H]
+        tip = np.median(np.array(tips), axis=0) if tips else frame   # 角尖外面的底色
+
+        def like(p_, c_):
+            return np.abs(p_ - c_).sum() <= 45
+
+        d = None
+        seen_frame = False
+        for t in range(0, reach):
+            px, py = int(round(cx + sx * t)), int(round(cy + sy * t))
+            if not (0 <= px < W and 0 <= py < H):
+                break
+            p1 = img[py, px]
+            if like(p1, frame):
+                seen_frame = True
+                continue
+            if like(p1, tip) and not seen_frame:
+                continue
+            px2, py2 = int(round(cx + sx * (t + 1))), int(round(cy + sy * (t + 1)))
+            if 0 <= px2 < W and 0 <= py2 < H:
+                p2 = img[py2, px2]
+                if like(p2, frame) or (like(p2, tip) and not seen_frame):
+                    continue                   # 抗锯齿的过渡像素：再看下一个
+            d = t
+            break
+        if d is None:
+            res.append(None)
+        else:
+            res.append(0.0 if d < 2 else (d + 0.5) / (1 - 1 / np.sqrt(2)))
+    return res
+
+
+def corner_radius_px(rgb: np.ndarray, x: float, y: float, w: float, h: float):
+    """整个照片位用的圆角（占短边比例），取各角里第二小的（个别角量偏了不影响）。返回 (比例, 量到的角数)。"""
+    rs = [r for r in corner_radii(rgb, x, y, w, h) if r is not None]
+    if not rs:
+        return None, 0
+    rs.sort()
+    r = rs[1] if len(rs) >= 3 else rs[0]
+    side = min(w, h)
+    return (0.0 if r < 2 else float(min(0.5, r / side))), len(rs)
+
+
+def trim_uniform_margins(rgb: np.ndarray, x: float, y: float, w: float, h: float, max_frac: float = 0.16,
+                         ignore=()):
+    """照片位里面如果还包着一圈颜色均匀的边（拍立得白边、纯色相框），往里收到真正的照片为止。
+    逐行（逐列）往里看：这一行颜色几乎一样、而且和最外面那行颜色接近，就算边框。"""
+    H, W = rgb.shape[:2]
+    X0, Y0, X1, Y1 = int(round(x)), int(round(y)), int(round(x + w)), int(round(y + h))
+    X0, Y0, X1, Y1 = max(0, X0), max(0, Y0), min(W, X1), min(H, Y1)
+    if X1 - X0 < 20 or Y1 - Y0 < 20:
+        return x, y, w, h
+    reg = rgb[Y0:Y1, X0:X1].astype(np.float32)
+    rh, rw = reg.shape[:2]
+    # 边框带子上常常写着字（比如黑色底栏上的「建议体重」）：文字的像素用这一行其余像素的中位色代替，不参与判断
+    skip = np.zeros((rh, rw), bool)
+    for bx0, by0, bx1, by1 in ignore:
+        ix0, iy0 = int(max(X0, bx0 - 2)) - X0, int(max(Y0, by0 - 2)) - Y0
+        ix1, iy1 = int(min(X1, bx1 + 2)) - X0, int(min(Y1, by1 + 2)) - Y0
+        if ix1 > ix0 and iy1 > iy0:
+            skip[iy0:iy1, ix0:ix1] = True
+    if skip.any():
+        reg = reg.copy()
+        for yy in np.where(skip.any(1))[0]:
+            row_ok = ~skip[yy]
+            if row_ok.any():
+                reg[yy, skip[yy]] = np.median(reg[yy, row_ok], 0)
+
+    def depth(lines, limit):
+        """lines: 从外往里的一行行像素 (n, len, 3)。返回要剥掉的厚度（没有就是 0）。
+        可以连着剥好几层：背景线、阴影线、白纸边……每一行只要「自己颜色均匀」（85% 以上的像素
+        和这一行的主色接近，允许回形针、贴纸压着）就算边框；遇到第一行不均匀的就停。
+        停下的地方必须是「突然」变成照片：慢慢过渡的（比如照片里的暗墙）不算边框。"""
+        if len(lines) < 4:
+            return 0
+
+        def frac(ln, ref):
+            return float((np.abs(ln - ref).sum(1) < 30).mean())
+
+        d = 0
+        last = None
+        for ln in lines[:limit]:
+            core = ln[int(len(ln) * 0.04):int(len(ln) * 0.96)]
+            ref = np.median(core, axis=0)
+            if frac(core, ref) < 0.85:
+                break
+            last = ref
+            d += 1
+        if d == 0 or d >= limit or d + 2 >= len(lines) or last is None:
+            return 0
+        after = (frac(lines[d], last) + frac(lines[d + 1], last)) / 2
+        return d if after < 0.45 else 0
+
+    ly, lx = int(rh * max_frac), int(rw * max_frac)
+    top = depth(reg, ly)
+    bot = depth(reg[::-1], ly)
+    lef = depth(reg.transpose(1, 0, 2), lx)
+    rig = depth(reg.transpose(1, 0, 2)[::-1], lx)
+    # 只有一两像素的「边」多半是抗锯齿，不算
+    top, bot, lef, rig = [v if v >= 3 else 0 for v in (top, bot, lef, rig)]
+    return x + lef, y + top, w - lef - rig, h - top - bot
+
+
 def refine_shape(rgb: np.ndarray, x: float, y: float, w: float, h: float, shape: str, radius: float):
     """把粗略找到的照片框吸附到真实的边上（原图坐标）。
     在框附近算边缘强度，微调四条边和圆角大小，让形状的轮廓刚好压在最清楚的那条边上；
@@ -375,3 +634,75 @@ def refine_shape(rgb: np.ndarray, x: float, y: float, w: float, h: float, shape:
     if fixed[3]:
         Y1 = float(H)
     return X0, Y0, X1 - X0, Y1 - Y0, shape, (0.5 if shape == "ellipse" else float(min(0.5, nr)))
+
+
+# ---------------------------------------------------------------- 保留层（盖在新照片上面的原图像素）
+def corner_keep_mask(rgb: np.ndarray, x: float, y: float, w: float, h: float, shape: str, radius: float):
+    """照片位四个角「圆弧外侧」那一小块保留原图像素（白边、底色、描边的圆弧）。
+    每个角用自己量出来的圆角半径，纯几何计算、1 像素抗锯齿，不靠颜色猜，不会漏进照片里。
+    返回和照片位外接矩形一样大的 0~1 浮点蒙版，以及它的左上角坐标。"""
+    H, W = rgb.shape[:2]
+    X0, Y0 = int(np.floor(x)), int(np.floor(y))
+    X1, Y1 = int(np.ceil(x + w)), int(np.ceil(y + h))
+    X0, Y0, X1, Y1 = max(0, X0), max(0, Y0), min(W, X1), min(H, Y1)
+    bw, bh = X1 - X0, Y1 - Y0
+    keep = np.zeros((bh, bw), np.float32)
+    if shape == "ellipse" or radius >= 0.45 or bw < 20 or bh < 20:
+        return keep, (X0, Y0)
+    side = min(w, h)
+    slot_r = radius * side
+    radii = corner_radii(rgb, x, y, w, h)
+    # 各角的半径不能比整个照片位的半径大太多（个别角量偏了，比如照片角落正好是暗色），方角的只留抗锯齿那一点
+    cap = 2.0 if slot_r < 1.5 else slot_r * 1.3 + 2
+    for (cx, cy, sx, sy), r in zip(((x, y, 1, 1), (x + w, y, -1, 1), (x, y + h, 1, -1), (x + w, y + h, -1, -1)), radii):
+        if r is None:
+            continue
+        r = float(min(r, cap))
+        if r < 1.5:
+            continue
+        # 圆心在角尖往里 r 的位置；圆弧外侧（离圆心比 r 远、又在角落那个 r×r 方块里）就是要保留的
+        ccx, ccy = cx + sx * r, cy + sy * r
+        xa = int(np.floor(min(cx, ccx))) - 1
+        xb = int(np.ceil(max(cx, ccx))) + 1
+        ya = int(np.floor(min(cy, ccy))) - 1
+        yb = int(np.ceil(max(cy, ccy))) + 1
+        xa, ya = max(X0, xa), max(Y0, ya)
+        xb, yb = min(X1, xb), min(Y1, yb)
+        if xb <= xa or yb <= ya:
+            continue
+        yy, xx = np.mgrid[ya:yb, xa:xb].astype(np.float32)
+        px, py = xx + 0.5, yy + 0.5                       # 像素中心
+        in_corner = ((px - ccx) * sx < 0) & ((py - ccy) * sy < 0)
+        dist = np.sqrt((px - ccx) ** 2 + (py - ccy) ** 2)
+        a = np.clip(dist - r + 0.5, 0, 1) * in_corner      # 1 像素抗锯齿
+        keep[ya - Y0:yb - Y0, xa - X0:xb - X0] = np.maximum(keep[ya - Y0:yb - Y0, xa - X0:xb - X0], a)
+    return keep, (X0, Y0)
+
+
+def element_mask(orig: np.ndarray, clean: np.ndarray, box, thr: float = 28.0):
+    """压在照片上的元素（徽章、回形针、照片上的字）的精确蒙版：
+    原图和「AI 把这块擦掉以后」的图对比，差得多的就是元素本身。返回 box 大小的 0~1 蒙版。
+    AI 补出来的照片纹理和原照片本来就不完全一样，所以要求差值能明显分成「元素」和「背景」两档，
+    而且元素只占框里的一部分；整块都不一样的（多半是照片本身），不算元素。"""
+    import cv2
+    x0, y0, x1, y1 = box
+    a = orig[y0:y1, x0:x1].astype(np.float32)
+    b = clean[y0:y1, x0:x1].astype(np.float32)
+    d = np.abs(a - b).sum(2)
+    if d.size == 0 or d.max() < thr * 2:
+        return np.zeros(d.shape, np.float32)
+    d8 = np.clip(d, 0, 255).astype(np.uint8)
+    t, _ = cv2.threshold(d8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    t = max(float(t), thr * 1.5)
+    hard = d > t
+    frac = float(hard.mean())
+    if frac > 0.45:
+        return np.zeros(d.shape, np.float32)
+    # 两档要分得开：元素部分的差值明显大于背景部分
+    lo = float(np.median(d[~hard])) if (~hard).any() else 0.0
+    hi = float(np.median(d[hard])) if hard.any() else 0.0
+    if hi < lo * 2.5 + thr:
+        return np.zeros(d.shape, np.float32)
+    m = np.clip((d - lo * 1.5) / max(1.0, (hi - lo * 1.5)), 0, 1).astype(np.float32)
+    m[~cv2.dilate(hard.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)] = 0
+    return m

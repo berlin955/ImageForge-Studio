@@ -32,3 +32,15 @@ jobs:
           PY
       - name: 上传
         run: gh release upload models-v1 layout.onnx -R ${{ github.repository }} --clobber
+
+  lama:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: 下载 AI 去字模型（LaMa）
+        run: |
+          curl -fL --retry 3 -o lama.onnx https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx
+          echo "LAMA $(stat -c %s lama.onnx) $(sha256sum lama.onnx | cut -d' ' -f1)"
+      - name: 上传
+        run: gh release upload models-v1 lama.onnx -R ${{ github.repository }} --clobber

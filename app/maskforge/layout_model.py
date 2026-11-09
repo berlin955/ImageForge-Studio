@@ -78,6 +78,40 @@ class LayoutModel:
             y += step
         return _merge_vertical(found)
 
+    def elements(self, rgb: np.ndarray, threshold: float = 0.4):
+        """除了照片以外的版面元素（文字、标题、印章 / 徽章、竖排字……），用来找压在照片上的东西。
+        返回 [(类别, x1, y1, x2, y2, 置信度)]。长图不做（分段后元素太碎）。"""
+        H, W = rgb.shape[:2]
+        if H > W * 1.8:
+            return []
+        out = []
+        for name, x1, y1, x2, y2, sc in self._raw(rgb):
+            if name not in IMAGE_CLASSES and sc >= threshold:
+                out.append((name, x1, y1, x2, y2, sc))
+        return out
+
+    def _raw(self, rgb: np.ndarray):
+        """模型的全部输出（缓存一下：同一张图找照片、找元素只算一次）。"""
+        key = (id(rgb), rgb.shape, float(rgb[::97, ::89].mean()))
+        if getattr(self, "_cache_key", None) == key:
+            return self._cache
+        import cv2
+        H, W = rgb.shape[:2]
+        S = self.SIZE
+        x = cv2.resize(rgb, (S, S), interpolation=cv2.INTER_AREA).astype(np.float32)
+        x = (x / 255.0).transpose(2, 0, 1)[None]
+        feeds = {"im_shape": np.array([[S, S]], np.float32), "image": np.ascontiguousarray(x),
+                 "scale_factor": np.array([[S / H, S / W]], np.float32)}
+        out = self.sess.run(None, feeds)[0]
+        res = []
+        for r in out:
+            c = int(r[0])
+            name = self.names[c] if 0 <= c < len(self.names) else str(c)
+            x1, y1, x2, y2 = (float(v) for v in r[2:6])
+            res.append((name, max(0.0, x1), max(0.0, y1), min(float(W), x2), min(float(H), y2), float(r[1])))
+        self._cache_key, self._cache = key, res
+        return res
+
     def _run(self, rgb: np.ndarray, threshold: float):
         import cv2
         H, W = rgb.shape[:2]

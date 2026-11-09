@@ -89,6 +89,25 @@ HANDLE = 10.0
 SHAPES = [("rect", "直角"), ("round", "圆角"), ("capsule", "胶囊"), ("ellipse", "椭圆")]
 
 
+_KEEP_CACHE: dict = {}
+
+
+def keep_image(tpl_id: str, slot: dict):
+    """照片位的保留层（盖在新照片上面的原图像素：边框圆角、徽章、照片上的字）。"""
+    k = slot.get("keep")
+    if not k:
+        return None, 0.0, 0.0
+    from .spec_engine import templates_dir
+    key = (tpl_id, k["file"])
+    img = _KEEP_CACHE.get(key)
+    if img is None:
+        img = QImage(str(templates_dir() / tpl_id / k["file"]))
+        if len(_KEEP_CACHE) > 64:
+            _KEEP_CACHE.clear()
+        _KEEP_CACHE[key] = img
+    return (img if not img.isNull() else None), float(k["x"]), float(k["y"])
+
+
 def slot_shape_key(slot: dict) -> str:
     if slot.get("shape") == "ellipse":
         return "ellipse"
@@ -191,6 +210,10 @@ class SlotItem(QGraphicsObject):
             p.setPen(QColor("#ffffff"))
             p.drawText(box, Qt.AlignmentFlag.AlignCenter, tip)
         p.restore()
+        if self.page.tpl:
+            kimg, kx, ky = keep_image(self.page.tpl["id"], self.slot)
+            if kimg is not None:
+                p.drawImage(QPointF(kx - self.slot["x"], ky - self.slot["y"]), kimg)
         if self.page.exporting:
             return
         if doc is None:
@@ -490,6 +513,7 @@ class TemplateWorker(QThread):
     failed = Signal(str)
     stage = Signal(str)
     layout = None
+    inpainter = None
 
     def __init__(self, path: str, get_detector, kind: str = "spec", parent=None):
         super().__init__(parent)
@@ -503,7 +527,7 @@ class TemplateWorker(QThread):
             except Exception:
                 det = None
             self.done.emit(build_template(self.path, det, kind=self.kind, progress=self.stage.emit,
-                                          layout=self.layout))
+                                          layout=self.layout, inpainter=self.inpainter))
         except Exception as e:
             self.failed.emit(str(e))
 
@@ -951,6 +975,7 @@ class TemplatePage(QWidget):
         self._update_side()
         w = TemplateWorker(path, self.mw.get_detector, self.kind, self)
         w.layout = self.mw.get_layout()      # 版面分析模型在界面线程里先加载好
+        w.inpainter = self.mw.get_inpainter()
         self._tw = w
         # 注意：后台线程发出的信号要连到界面对象的方法上（会排队到界面线程执行），不能连 lambda
         w.stage.connect(self.scan_status.show_text)
@@ -1419,6 +1444,9 @@ class TemplatePage(QWidget):
                 p.setClipPath(slot_path(s, rr))
                 p.drawImage(rr, img)
                 p.restore()
+            kimg, kx, ky = keep_image(tpl["id"], s)
+            if kimg is not None:
+                p.drawImage(QPointF(kx, ky), kimg)
         for t in tpl["texts"]:
             if text_changed(t):
                 draw_text(p, t)

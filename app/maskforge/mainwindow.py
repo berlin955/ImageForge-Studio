@@ -934,6 +934,18 @@ class MainWindow(QMainWindow):
                 self._layout = None
         return self._layout
 
+    def get_inpainter(self):
+        """AI 去字模型。没有时返回 None，退回到普通修补。"""
+        if getattr(self, "_inpainter", "unset") == "unset":
+            self._inpainter = None
+            try:
+                from .inpaint import Inpainter, inpaint_model_path
+                if inpaint_model_path().exists():
+                    self._inpainter = Inpainter(inpaint_model_path())
+            except Exception:
+                self._inpainter = None
+        return self._inpainter
+
     def has_pose(self) -> bool:
         p = getattr(self, "_pose", "unset")
         if p == "unset":

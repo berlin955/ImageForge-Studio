@@ -251,7 +251,12 @@ def find_slots(rgb: np.ndarray, dets: list[dict], blocks: bool = False, text_box
         slots.append({"x": r[0], "y": r[1], "w": r[2] - r[0], "h": r[3] - r[1], "shape": "rect", "radius": 0.0})
 
     # 贴边校准：把每个照片位的轮廓（含圆角大小）吸附到真实的相框边上
-    from .photo_regions import refine_shape
+    from .photo_regions import refine_shape, trim_uniform_margins
+    for s in slots:
+        if s.get("shape", "rect") == "rect" and float(s.get("radius") or 0) < 0.3:
+            x, y, w, h = trim_uniform_margins(rgb, s["x"], s["y"], s["w"], s["h"], ignore=text_boxes)
+            if w > s["w"] * 0.6 and h > s["h"] * 0.6:
+                s.update({"x": x, "y": y, "w": w, "h": h})
     for s in slots:
         try:
             x, y, w, h, shape, rad = refine_shape(rgb, s["x"], s["y"], s["w"], s["h"],
@@ -260,6 +265,35 @@ def find_slots(rgb: np.ndarray, dets: list[dict], blocks: bool = False, text_box
                 s.update({"x": x, "y": y, "w": w, "h": h, "shape": shape, "radius": rad})
         except Exception:
             pass
+    # 最后一步：原图全分辨率下逐条边对齐到像素级（椭圆没有直边，不做）
+    from .photo_regions import snap_sides
+    for s in slots:
+        if s.get("shape") == "ellipse" or float(s.get("radius") or 0) >= 0.45:
+            continue
+        try:
+            x, y, w, h = snap_sides(rgb, s["x"], s["y"], s["w"], s["h"])
+            if abs(w - s["w"]) < max(12, s["w"] * 0.07) and abs(h - s["h"]) < max(12, s["h"] * 0.07):
+                s.update({"x": x, "y": y, "w": w, "h": h})
+        except Exception:
+            pass
+    # 圆角也在全分辨率下重新量一遍（照片外面有一圈描边时，之前容易量小）
+    from .photo_regions import corner_radius_px
+    for s in slots:
+        if s.get("shape") == "ellipse" or float(s.get("radius") or 0) >= 0.3:
+            continue
+        try:
+            r, n_c = corner_radius_px(rgb, s["x"], s["y"], s["w"], s["h"])
+            if r is not None and n_c >= 2:
+                s["radius"] = r
+            elif float(s.get("radius") or 0) < 0.03:
+                s["radius"] = 0.0
+        except Exception:
+            pass
+    # 不能超出整张图
+    for s in slots:
+        x0, y0 = max(0.0, s["x"]), max(0.0, s["y"])
+        x1, y1 = min(float(W), s["x"] + s["w"]), min(float(H), s["y"] + s["h"])
+        s.update({"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0})
 
     if blocks:
         for b in photo_blocks(gray):
@@ -470,7 +504,8 @@ def rgb_to_qimage(rgb: np.ndarray) -> QImage:
 
 
 # ================================================================ 生成 / 保存模板
-def build_template(path: str, detector, name: str = "", kind: str = "spec", progress=None, layout=None) -> dict:
+def build_template(path: str, detector, name: str = "", kind: str = "spec", progress=None, layout=None,
+                   inpainter=None) -> dict:
     """分析一张规格图，生成模板并保存，返回模板数据。"""
     # 这一步在后台线程里跑，全程只用 numpy / OpenCV，不碰 Qt 的图片对象
     import cv2
@@ -502,7 +537,18 @@ def build_template(path: str, detector, name: str = "", kind: str = "spec", prog
     slots = find_slots(rgb, dets, blocks=(kind == "detail" and not lboxes), text_boxes=boxes, layout_boxes=lboxes)
     texts, mask = find_texts(rgb, slots, ocr=ocr)
     say("正在擦除原来的文字")
-    clean = erase(rgb, mask)
+    if inpainter is not None and texts:
+        # AI 去字：直接把整个文字框交给它补（浅色小字、描边、阴影都能一起擦干净）
+        box = np.zeros(mask.shape, np.uint8)
+        for t in texts:
+            x1, y1, x2, y2 = t["patch"]
+            box[max(0, y1 - 1):y2 + 1, max(0, x1 - 1):x2 + 1] = 255
+        try:
+            clean = inpainter.inpaint(rgb, box)
+        except Exception:
+            clean = erase(rgb, mask)
+    else:
+        clean = erase(rgb, mask)
     tid = uuid.uuid4().hex[:10]
     folder = templates_dir() / tid
     folder.mkdir(parents=True, exist_ok=True)
@@ -524,12 +570,76 @@ def build_template(path: str, detector, name: str = "", kind: str = "spec", prog
         s["role"] = roles[i] if i < len(roles) else f"图片{i + 1}"
         s.setdefault("shape", "rect")
         s.setdefault("radius", 0.0)
+    say("正在保留压在照片上的元素")
+    try:
+        make_keep_layers(rgb, slots, folder, layout, inpainter, ocr)
+    except Exception:
+        pass
     tpl = {"id": tid, "kind": kind, "name": name or default_name(path, kind), "w": W, "h": H,
            "slots": slots, "texts": texts,
            "ocr_error": (last_error.strip().splitlines() or [""])[-1][:300] if last_error else "",
            "ocr_raw": len(ocr), "confirmed": False}
     save_template(tpl)
     return tpl
+
+
+OVERLAY_CLASSES = {"seal", "text", "paragraph_title", "doc_title", "vertical_text", "header_image", "footer_image",
+                   "aside_text", "number", "figure_title", "header", "footer", "vision_footnote"}
+
+
+def make_keep_layers(rgb, slots, folder, layout=None, inpainter=None, ocr=()):
+    """给每个照片位做一层「保留层」：换图后盖在新照片上面的原图像素（带透明度）。
+    1. 四个角上照片框外侧颜色的像素（白边、底色、描边圆弧）——角对得再不准也不会露原图、压边框；
+    2. 压在照片上的元素：徽章 / 印章、照片上的字、回形针这类——用 AI 把它们擦掉再和原图比，差出来的就是元素本身。"""
+    import cv2
+    from .photo_regions import corner_keep_mask, element_mask
+    H, W = rgb.shape[:2]
+    # 压在照片上的元素框：版面模型认出的非照片元素 + 文字识别的框
+    boxes = []
+    if layout is not None:
+        try:
+            for name_, x1, y1, x2, y2, sc in layout.elements(rgb):
+                if name_ in OVERLAY_CLASSES:
+                    boxes.append((x1, y1, x2, y2))
+        except Exception:
+            pass
+    for item in ocr or ():
+        pts = np.array(item[0], dtype=np.float32)
+        boxes.append((*pts.min(0), *pts.max(0)))
+    el_mask = np.zeros((H, W), np.uint8)
+    for s in slots:
+        r = (s["x"], s["y"], s["x"] + s["w"], s["y"] + s["h"])
+        for b in boxes:
+            inter = _overlap(r, b)
+            ab = _area(b)
+            if ab <= 0 or inter < 0.3 * ab or ab > 0.25 * _area(r):
+                continue
+            x1, y1, x2, y2 = (int(max(0, b[0] - 3)), int(max(0, b[1] - 3)), int(min(W, b[2] + 3)), int(min(H, b[3] + 3)))
+            el_mask[y1:y2, x1:x2] = 255
+    clean_el = None
+    if el_mask.any() and inpainter is not None:
+        try:
+            clean_el = inpainter.inpaint(rgb, el_mask)
+        except Exception:
+            clean_el = None
+    for s in slots:
+        keep, (X0, Y0) = corner_keep_mask(rgb, s["x"], s["y"], s["w"], s["h"], s.get("shape", "rect"),
+                                          float(s.get("radius") or 0))
+        bh, bw = keep.shape
+        if clean_el is not None:
+            sub = el_mask[Y0:Y0 + bh, X0:X0 + bw] > 0
+            if sub.any():
+                em = element_mask(rgb, clean_el, (X0, Y0, X0 + bw, Y0 + bh))
+                keep = np.maximum(keep, em * sub)
+        if keep.max() < 0.05:
+            s.pop("keep", None)
+            continue
+        rgba = np.dstack([rgb[Y0:Y0 + bh, X0:X0 + bw], (keep * 255).astype(np.uint8)])
+        fn = f"keep_{uuid.uuid4().hex[:8]}.png"
+        ok, buf = cv2.imencode(".png", np.ascontiguousarray(rgba[:, :, [2, 1, 0, 3]]))
+        if ok:
+            buf.tofile(str(folder / fn))
+            s["keep"] = {"file": fn, "x": float(X0), "y": float(Y0)}
 
 
 def default_name(path: str, kind: str) -> str:

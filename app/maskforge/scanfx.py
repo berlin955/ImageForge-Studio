@@ -140,6 +140,7 @@ class ScanOverlay(QGraphicsObject):
             p.fillPath(path, fill)
             pts = _partial(path, prog)
             poly = QPolygonF(pts)
+            p.setBrush(Qt.BrushStyle.NoBrush)
             for wdt, a in ((11, 0.10), (6, 0.22), (2.4, 1.0)):
                 c = QColor(self.accent) if wdt > 3 else QColor(255, 255, 255)
                 c.setAlphaF(a)
@@ -148,7 +149,10 @@ class ScanOverlay(QGraphicsObject):
                 pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
                 p.setPen(pen)
-                p.drawPolyline(poly)
+                if prog >= 1:
+                    p.drawPath(path)          # 描完了直接画真实形状，角不会被折线切歪
+                else:
+                    p.drawPolyline(poly)
             if prog < 1 and pts:
                 head = pts[-1]
                 c = QColor(255, 255, 255, 230)
@@ -180,7 +184,9 @@ def _rect_path(s: dict) -> QPainterPath:
     return path
 
 
-def _partial(path: QPainterPath, prog: float, steps: int = 140) -> list:
+def _partial(path: QPainterPath, prog: float, steps: int = 900) -> list:
+    """沿形状取点画「描边中」的那一段。按真实长度均匀取点（pointAtPercent 本来就是按长度），
+    点要够密，圆角处才不会被连成折线、看起来歪掉。"""
     n = max(2, int(steps * prog))
     return [path.pointAtPercent(min(1.0, prog * i / (n - 1))) for i in range(n)]
 
