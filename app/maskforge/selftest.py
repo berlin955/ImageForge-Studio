@@ -54,6 +54,8 @@ def run_selftest(log_path: str | None = None) -> int:
         det = Detector(mp)
         dets = det.detect(img, 0.25)
         log(f"detector ok: model={mp.name} input={det.size}, detections={len(dets)}")
+        if mp.stem.startswith("640"):
+            assert det.size == 640, f"640 模型的推理分辨率不对：{det.size}"
         fake = [
             {"label": "FEMALE_BREAST_EXPOSED", "score": 0.8, "box": (400, 400, 560, 560)},
             {"label": "FEMALE_BREAST_EXPOSED", "score": 0.8, "box": (640, 400, 800, 560)},

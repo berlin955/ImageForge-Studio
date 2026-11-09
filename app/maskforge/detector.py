@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 import os
 import threading
+from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt
@@ -57,7 +58,13 @@ class Detector:
         inp = self.sess.get_inputs()[0]
         self.input_name = inp.name
         size = inp.shape[2] if len(inp.shape) == 4 else None
-        self.size = size if isinstance(size, int) and size > 0 else 320
+        if isinstance(size, int) and size > 0:
+            self.size = size
+        else:
+            # 动态尺寸的模型：按文件名决定推理分辨率（640m -> 640，320n -> 320）
+            import re
+            m = re.match(r"(\d{3,4})", Path(str(model_file)).stem)
+            self.size = int(m.group(1)) if m else 640
         self._lock = threading.Lock()
 
     def _run(self, canvas: np.ndarray) -> np.ndarray:
