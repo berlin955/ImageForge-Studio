@@ -298,11 +298,9 @@ class MainWindow(QMainWindow):
             "watermark": ("批量水印", "给打码图、主图、规格图、详情图批量加上你的 Logo，透明度、位置、大小可调，每张还能单独挪位置。"),
             "templates": ("模板库", "保存好的规格、详情、主图模板都在这里，下次新款直接套用。"),
         }
-        for key, glyph, text in self.NAV:
-            b = QPushButton(f"{glyph}\n{text}")
-            b.setObjectName("NavBtn")
+        for key, _glyph, text in self.NAV:
+            b = self._nav_button(text, "mask" if key == "mask" else key)
             b.setCheckable(True)
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(lambda _=False, k=key: self.show_page(k))
             self.nav_group.addButton(b)
             self.nav_btns[key] = b
@@ -311,13 +309,9 @@ class MainWindow(QMainWindow):
             self.pages.addWidget(page)
             self.page_keys.append(key)
         nv.addStretch(1)
-        self.b_theme = QPushButton("◑\n主题")
-        self.b_theme.setObjectName("NavBtn")
-        self.b_theme.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.b_theme = self._nav_button("主题", "theme")
         self.b_theme.clicked.connect(self._theme_menu)
-        b_set = QPushButton("⚙\n设置")
-        b_set.setObjectName("NavBtn")
-        b_set.setCursor(Qt.CursorShape.PointingHandCursor)
+        b_set = self._nav_button("设置", "settings")
         b_set.setToolTip("Ctrl+,")
         b_set.clicked.connect(lambda: self.open_settings())
         nv.addWidget(self.b_theme)
@@ -331,6 +325,25 @@ class MainWindow(QMainWindow):
         h.addWidget(self.pages, 1)
         self.setCentralWidget(central)
         self.show_page("assets")
+
+    def _nav_button(self, text: str, icon: str):
+        from PySide6.QtWidgets import QToolButton
+        b = QToolButton()
+        b.setObjectName("NavBtn")
+        b.setText(text)
+        b.setProperty("nav_icon", icon)
+        b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        b.setIconSize(QSize(26, 26))
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setFixedWidth(72)
+        self._nav_all = getattr(self, "_nav_all", []) + [b]
+        self._paint_nav_icon(b)
+        return b
+
+    def _paint_nav_icon(self, b):
+        from .icons import make_icon
+        pal = theme.current()
+        b.setIcon(make_icon(b.property("nav_icon"), pal["muted"], pal["accent"]))
 
     def current_page(self) -> str:
         i = self.pages.currentIndex()
@@ -1088,6 +1101,8 @@ class MainWindow(QMainWindow):
 
     def apply_theme(self):
         theme.apply(QApplication.instance(), self.cfg["theme"])
+        for b in getattr(self, "_nav_all", []):
+            self._paint_nav_icon(b)
         self.canvas.apply_theme()
         self._placeholder = self._make_placeholder()
         for i in range(len(self.docs)):

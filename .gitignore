@@ -11,3 +11,4 @@ assets/icon.png
 venv/
 notes.md
 selftest*.log
+preview/

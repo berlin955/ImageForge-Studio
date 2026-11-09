@@ -73,10 +73,10 @@ QMainWindow, QDialog, #Workspace { background: $bg; }
 #TopBar { background: $side; border-bottom: 1px solid $line; }
 #NavRail { background: $bg; border-right: 1px solid $line; }
 QLabel#NavBrand { font-size: 12px; font-weight: 700; color: $fg; }
-QPushButton#NavBtn { background: transparent; border: 1px solid transparent; border-radius: 10px;
-                     padding: 8px 2px; color: $muted; font-size: 12px; font-weight: 600; min-height: 44px; }
-QPushButton#NavBtn:hover { background: $hover; color: $fg; }
-QPushButton#NavBtn:checked { background: $accent_soft; color: $fg; border-color: $accent; }
+QToolButton#NavBtn { background: transparent; border: 1px solid transparent; border-radius: 12px;
+                     padding: 8px 2px 7px 2px; color: $muted; font-size: 12px; font-weight: 600; }
+QToolButton#NavBtn:hover { background: $hover; color: $fg; }
+QToolButton#NavBtn:checked { background: $accent_soft; color: $fg; border-color: $accent; }
 #Side { background: $side; border-right: 1px solid $line; }
 #SideFoot { background: $side; border-top: 1px solid $line; }
 #Toolbar { background: $bg; border-bottom: 1px solid $line; }

@@ -63,6 +63,8 @@ jobs:
         run: |
           python tools/fetch_model.py
           python tools/make_icon.py
+          mkdir preview -Force | Out-Null
+          python tools/render_icons.py preview/nav_icons_preview.png
 
       - name: 下载高精度识别模型（640m）
         shell: pwsh
@@ -140,6 +142,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Compress-Archive -Path "dist\MaskForge\*" -DestinationPath "dist-installer\ImageForge-Studio-Portable-$env:APP_VERSION.zip"
           Get-ChildItem dist-installer
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-preview
+          path: preview/*
+          retention-days: 7
 
       - uses: actions/upload-artifact@v4
         with:
