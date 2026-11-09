@@ -465,6 +465,7 @@ def run_selftest(log_path: str | None = None) -> int:
         assert mw.spec_page.tpl["id"] == sp.tpl["id"]
         log("template library ok")
         # 左侧面板不能被撑得比可见区域宽（之前右半边按钮被切掉）
+        from PySide6.QtWidgets import QScrollArea
         for pg in (mw.spec_page, mw.detail_page):
             sa = pg.findChild(QScrollArea)
             if sa and sa.widget():
