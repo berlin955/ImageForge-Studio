@@ -217,6 +217,17 @@ def find_slots(rgb: np.ndarray, dets: list[dict], blocks: bool = False, text_box
             r = (max(0, p[0] - mx), max(0, p[1] - my), min(W, p[2] + mx), min(H, p[3] + my))
         slots.append({"x": r[0], "y": r[1], "w": r[2] - r[0], "h": r[3] - r[1], "shape": "rect", "radius": 0.0})
 
+    # 贴边校准：把每个照片位的轮廓（含圆角大小）吸附到真实的相框边上
+    from .photo_regions import refine_shape
+    for s in slots:
+        try:
+            x, y, w, h, shape, rad = refine_shape(rgb, s["x"], s["y"], s["w"], s["h"],
+                                                  s.get("shape", "rect"), float(s.get("radius") or 0))
+            if w > s["w"] * 0.85 and h > s["h"] * 0.85:
+                s.update({"x": x, "y": y, "w": w, "h": h, "shape": shape, "radius": rad})
+        except Exception:
+            pass
+
     if blocks:
         for b in photo_blocks(gray):
             b = [v / k for v in b]

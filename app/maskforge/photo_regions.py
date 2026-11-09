@@ -172,3 +172,160 @@ def find_regions(rgb: np.ndarray, min_area: float = 0.025, min_colors: int = 30,
         out.append({"x": X, "y": Y, "w": X2 - X, "h": Y2 - Y, "shape": shape, "radius": radius,
                     "colors": colors, "fit": round(fit, 3), "photo": colors >= min_colors})
     return out
+
+
+# ---------------------------------------------------------------- 贴边校准
+def shape_points(x0, y0, x1, y1, shape, radius, n=360):
+    """沿形状边缘均匀取点，返回 (n, 2) 数组。"""
+    w, h = max(1.0, x1 - x0), max(1.0, y1 - y0)
+    t = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    if shape == "ellipse":
+        return np.stack([x0 + w / 2 + np.cos(t) * w / 2, y0 + h / 2 + np.sin(t) * h / 2], 1)
+    r = min(w, h) * min(0.5, max(0.0, radius))
+    # 圆角矩形：四条直边 + 四段圆弧，按周长比例分配点数
+    segs = []
+    straight = [((x0 + r, y0), (x1 - r, y0)), ((x1, y0 + r), (x1, y1 - r)),
+                ((x1 - r, y1), (x0 + r, y1)), ((x0, y1 - r), (x0, y0 + r))]
+    arcs = [((x1 - r, y0 + r), -np.pi / 2), ((x1 - r, y1 - r), 0.0), ((x0 + r, y1 - r), np.pi / 2),
+            ((x0 + r, y0 + r), np.pi)]
+    lens = [np.hypot(b[0] - a[0], b[1] - a[1]) for a, b in straight] + [np.pi * r / 2] * 4
+    total = max(1e-6, sum(lens))
+    for i in range(4):
+        (a, b), L = straight[i], lens[i]
+        m = max(2, int(n * L / total))
+        u = np.linspace(0, 1, m, endpoint=False)
+        segs.append(np.stack([a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u], 1))
+        (c, a0), La = arcs[i], lens[4 + i]
+        if r > 0.5:
+            m = max(2, int(n * La / total))
+            u = np.linspace(a0, a0 + np.pi / 2, m, endpoint=False)
+            segs.append(np.stack([c[0] + np.cos(u) * r, c[1] + np.sin(u) * r], 1))
+    return np.concatenate(segs, 0)
+
+
+def _sample(img, pts):
+    h, w = img.shape[:2]
+    xi = np.clip(np.round(pts[:, 0]).astype(int), 0, w - 1)
+    yi = np.clip(np.round(pts[:, 1]).astype(int), 0, h - 1)
+    return img[yi, xi]
+
+
+def refine_shape(rgb: np.ndarray, x: float, y: float, w: float, h: float, shape: str, radius: float):
+    """把粗略找到的照片框吸附到真实的边上（原图坐标）。
+    在框附近算边缘强度，微调四条边和圆角大小，让形状的轮廓刚好压在最清楚的那条边上；
+    如果相框有描边，再往里找描边的内侧，让照片填到描边里面、不盖住描边。"""
+    import cv2
+    H, W = rgb.shape[:2]
+    m = int(max(8, min(w, h) * 0.06))
+    cx0, cy0 = int(max(0, x - m)), int(max(0, y - m))
+    cx1, cy1 = int(min(W, x + w + m)), int(min(H, y + h + m))
+    crop = rgb[cy0:cy1, cx0:cx1]
+    if crop.size == 0:
+        return x, y, w, h, shape, radius
+    k = min(1.0, 900 / max(crop.shape[:2]))
+    if k < 1:
+        crop = cv2.resize(crop, (max(1, int(crop.shape[1] * k)), max(1, int(crop.shape[0] * k))),
+                          interpolation=cv2.INTER_AREA)
+    lab = cv2.cvtColor(np.ascontiguousarray(crop), cv2.COLOR_RGB2LAB).astype(np.float32)
+    lab = cv2.GaussianBlur(lab, (3, 3), 0)
+    gx = cv2.Sobel(lab, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(lab, cv2.CV_32F, 0, 1, ksize=3)
+    grad = np.sqrt((gx ** 2 + gy ** 2).sum(2))
+    grad = cv2.GaussianBlur(grad, (3, 3), 0)
+    ch, cw = grad.shape
+    # 参数换到裁切图坐标
+    p = [(x - cx0) * k, (y - cy0) * k, (x + w - cx0) * k, (y + h - cy0) * k, radius]
+    p0 = list(p)
+    fixed = [x <= 1, y <= 1, x + w >= W - 1, y + h >= H - 1]      # 贴着整张图边缘的边不动
+    lim = max(4.0, min(p[2] - p[0], p[3] - p[1]) * 0.025)          # 每条边最多挪这么多
+    # 边缘强度封顶：避免被照片里很强的线条（衣服边、身体轮廓）吸过去
+    pts0 = shape_points(p[0], p[1], p[2], p[3], shape, p[4])
+    cap = float(np.median(_sample(grad, pts0))) * 1.5 + 1.0
+    gcap = np.minimum(grad, cap)
+
+    def score(q, g=None):
+        if q[2] - q[0] < 10 or q[3] - q[1] < 10:
+            return -1.0
+        pts = shape_points(q[0], q[1], q[2], q[3], shape, q[4])
+        inside = (pts[:, 0] > 1) & (pts[:, 0] < cw - 2) & (pts[:, 1] > 1) & (pts[:, 1] < ch - 2)
+        if inside.mean() < 0.5:
+            return -1.0
+        pts = pts[inside]
+        # 外法线方向：边的外侧应该是平整的设计底色 / 描边，里面才是照片
+        tan = np.roll(pts, -1, 0) - np.roll(pts, 1, 0)
+        nrm = np.stack([tan[:, 1], -tan[:, 0]], 1)
+        nrm /= np.maximum(1e-6, np.linalg.norm(nrm, axis=1, keepdims=True))
+        ctr = np.array([(q[0] + q[2]) / 2, (q[1] + q[3]) / 2])
+        flip = ((pts - ctr) * nrm).sum(1) < 0
+        nrm[flip] *= -1
+        on = _sample(gcap if g is None else g, pts).mean()
+        out = _sample(gcap, pts + nrm * 3.0).mean()
+        return float(on - 0.8 * out)
+
+    best = score(p)
+    for step in (6.0, 3.0, 1.5, 0.75):
+        improved = True
+        loops = 0
+        while improved and loops < 25:
+            improved = False
+            loops += 1
+            for i in range(5):
+                if i < 4 and fixed[i]:
+                    continue
+                if i == 4 and shape == "ellipse":
+                    continue
+                for d in (-step, step):
+                    q = list(p)
+                    q[i] += d if i < 4 else d / max(10.0, min(q[2] - q[0], q[3] - q[1]))
+                    if i == 4:
+                        q[4] = float(min(0.5, max(0.0, q[4])))
+                    elif abs(q[i] - p0[i]) > lim:
+                        continue
+                    sc = score(q)
+                    if sc > best + 1e-3:
+                        best, p, improved = sc, q, True
+    # 有描边的话，往里找描边内侧那条边
+    inset = 0.0
+    if best > 0:
+        prof = []
+        for d in np.arange(0, max(3, min(p[2] - p[0], p[3] - p[1]) * 0.05), 0.75):
+            q = [p[0] + d, p[1] + d, p[2] - d, p[3] - d]
+            r2 = p[4] * min(p[2] - p[0], p[3] - p[1]) - d
+            r2 = max(0.0, r2) / max(1.0, min(q[2] - q[0], q[3] - q[1]))
+            prof.append((d, score(q + [r2])))
+        ds = np.array([a for a, _ in prof])
+        vs = np.array([b for _, b in prof])
+        # 先离开主边（强度掉到一半以下），再遇到的第二个峰就是描边内侧
+        low = np.where(vs < best * 0.55)[0]
+        if len(low):
+            j0 = low[0]
+            rest = vs[j0:]
+            if len(rest) > 2:
+                j = j0 + int(rest.argmax())
+                if vs[j] > best * 0.45 and ds[j] > 0:
+                    inset = ds[j] + 0.75
+        if inset > 0:
+            # 主边和内侧边之间必须是一圈颜色均匀的描边，否则是照片内容，不算
+            d = inset / 2
+            q = [p[0] + d, p[1] + d, p[2] - d, p[3] - d]
+            r2 = max(0.0, p[4] * min(p[2] - p[0], p[3] - p[1]) - d) / max(1.0, min(q[2] - q[0], q[3] - q[1]))
+            band = _sample(crop.astype(np.float32), shape_points(q[0], q[1], q[2], q[3], shape, r2))
+            if float(band.std(0).mean()) > 14:
+                inset = 0.0
+        if inset == 0:
+            inset = 0.75
+    q = [p[0] + inset * (not fixed[0]), p[1] + inset * (not fixed[1]),
+         p[2] - inset * (not fixed[2]), p[3] - inset * (not fixed[3])]
+    r_px = p[4] * min(p[2] - p[0], p[3] - p[1]) - inset
+    nr = max(0.0, r_px) / max(1.0, min(q[2] - q[0], q[3] - q[1]))
+    X0, Y0 = q[0] / k + cx0, q[1] / k + cy0
+    X1, Y1 = q[2] / k + cx0, q[3] / k + cy0
+    if fixed[0]:
+        X0 = 0.0
+    if fixed[1]:
+        Y0 = 0.0
+    if fixed[2]:
+        X1 = float(W)
+    if fixed[3]:
+        Y1 = float(H)
+    return X0, Y0, X1 - X0, Y1 - Y0, shape, (0.5 if shape == "ellipse" else float(min(0.5, nr)))
