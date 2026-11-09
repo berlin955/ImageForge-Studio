@@ -1,0 +1,63 @@
+name: devkit
+
+# 开发用：把测试识别效果需要的模型、轮子打包到 devkit 预发布里（不是软件版本）
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: 下载
+        run: |
+          set -x
+          mkdir -p kit wheels
+          pip download --only-binary=:all: --python-version 3.13 --platform manylinux2014_x86_64 --platform manylinux_2_17_x86_64 \
+            -d wheels pyclipper shapely tqdm || true
+          pip download --no-deps -d wheels rapidocr_onnxruntime==1.4.4 || true
+          gh release download v3.4-weights -R notAI-tech/NudeNet -p 640m.onnx -D kit || true
+          pip install rapid-layout onnxruntime || true
+          python - <<'PY' || true
+          import shutil, glob, os, traceback
+          os.makedirs("kit/layout", exist_ok=True)
+          try:
+              import rapid_layout, inspect
+              print("rapid_layout", getattr(rapid_layout, "__version__", "?"), rapid_layout.__file__)
+              from rapid_layout import RapidLayout
+              print(inspect.signature(RapidLayout.__init__))
+          except Exception:
+              traceback.print_exc()
+          names = ["pp_layout_cdla", "pp_layout_publaynet", "yolov8n_layout_general6", "yolov8n_layout_report",
+                   "doclayout_docstructbench", "doclayout_d4la", "pp_doc_layoutv2", "pp_doc_layout_plus_l"]
+          for n in names:
+              try:
+                  try:
+                      eng = RapidLayout(model_type=n)
+                  except TypeError:
+                      from rapid_layout import RapidLayoutInput, ModelType
+                      eng = RapidLayout(cfg=RapidLayoutInput(model_type=ModelType(n.upper()) if hasattr(ModelType, n.upper()) else n))
+                  print("ok", n)
+              except Exception as e:
+                  print("fail", n, e)
+          for f in glob.glob(os.path.expanduser("~") + "/**/*.onnx", recursive=True) + \
+                   glob.glob("/opt/hostedtoolcache/**/rapid_layout/**/*.onnx", recursive=True):
+              print("found", f, os.path.getsize(f))
+              shutil.copy(f, "kit/layout/" + os.path.basename(f))
+          PY
+          pip download --no-deps -d wheels rapid-layout || true
+          ls -la kit kit/layout wheels
+          cd kit && zip -r ../devkit.zip . ../wheels && cd ..
+          ls -la devkit.zip
+      - name: 上传
+        run: |
+          gh release view devkit -R ${{ github.repository }} >/dev/null 2>&1 || \
+            gh release create devkit -R ${{ github.repository }} --prerelease --title "开发测试用（不是软件版本）" --notes "开发测试用的模型和依赖。"
+          gh release upload devkit devkit.zip -R ${{ github.repository }} --clobber
