@@ -13,9 +13,34 @@ import numpy as np
 IMAGE_CLASSES = ("image", "chart")
 
 
+# 模型不放进安装包（太大，每次更新都要重下），第一次用智能规格 / 智能详情时下载一次
+MODEL_SHA256 = "9e678667339df76ef220a72cbddf3ef6504f9f7df89623d6035a4d4497d24c36"
+MODEL_SIZE = 131288936
+
+
+def model_url() -> str:
+    from . import REPO
+    return f"https://github.com/{REPO}/releases/download/models-v1/layout.onnx"
+
+
+def downloaded_path() -> Path:
+    from .config import data_dir
+    return data_dir() / "models" / "layout.onnx"
+
+
 def layout_model_path() -> Path:
+    """优先用安装目录里的（开发时），其次用下载到数据目录里的。"""
     from .config import resource_dir
-    return resource_dir() / "models" / "layout.onnx"
+    p = resource_dir() / "models" / "layout.onnx"
+    return p if p.exists() else downloaded_path()
+
+
+def install_downloaded(tmp_path: str) -> Path:
+    import shutil
+    dst = downloaded_path()
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(tmp_path, dst)
+    return dst
 
 
 class LayoutModel:
@@ -47,11 +72,11 @@ class LayoutModel:
                 # 贴着这一段上下边缘的框可能被切断了，留给相邻那一段
                 cut_top = y1 < 3 and y > 0
                 cut_bot = y2 > h - 3 and y + h < H
-                found.append((x1, y1 + y, x2, y2 + y, s - 0.2 * (cut_top + cut_bot)))
+                found.append((x1, y1 + y, x2, y2 + y, s, bool(cut_top or cut_bot)))
             if y + h >= H:
                 break
             y += step
-        return _nms(found, 0.5)
+        return _merge_vertical(found)
 
     def _run(self, rgb: np.ndarray, threshold: float):
         import cv2
@@ -71,6 +96,29 @@ class LayoutModel:
                 if x2 - x1 > 8 and y2 - y1 > 8:
                     res.append((x1, y1, x2, y2, float(r[1])))
         return _nms(res, 0.5)
+
+
+def _merge_vertical(boxes):
+    """长图分段识别后：同一张照片被切成上下几块的，合并成一块；重复的去掉。"""
+    boxes = sorted(boxes, key=lambda b: b[1])
+    out: list[list[float]] = []
+    for b in boxes:
+        b = list(b)
+        merged = False
+        for o in out:
+            xo = max(0.0, min(b[2], o[2]) - max(b[0], o[0])) / max(1.0, min(b[2] - b[0], o[2] - o[0]))
+            yo = min(b[3], o[3]) - max(b[1], o[1])
+            if xo > 0.85 and yo > -2 and (b[5] or o[5]) and yo < 0.98 * min(b[3] - b[1], o[3] - o[1]) \
+                    or xo > 0.85 and yo > 0.6 * min(b[3] - b[1], o[3] - o[1]):
+                o[0], o[1] = min(o[0], b[0]), min(o[1], b[1])
+                o[2], o[3] = max(o[2], b[2]), max(o[3], b[3])
+                o[4] = max(o[4], b[4])
+                o[5] = o[5] and b[5]
+                merged = True
+                break
+        if not merged:
+            out.append(b)
+    return [tuple(o[:5]) for o in out]
 
 
 def _nms(boxes, thr):

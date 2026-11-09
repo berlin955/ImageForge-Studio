@@ -501,7 +501,8 @@ def run_selftest(log_path: str | None = None) -> int:
             dr.text((500, 740), "建议体重：80-115斤", font=_PF.truetype(font_file, 24), fill=(90, 70, 60))
             zh_src = tmp / "中文规格.png"
             pim.save(str(zh_src))
-            ztpl = build_template(str(zh_src), mw.get_detector(), "中文规格")
+            log(f"layout model: {mw.get_layout() is not None}")
+            ztpl = build_template(str(zh_src), mw.get_detector(), "中文规格", layout=mw.get_layout())
             zt = " | ".join(t["text"] for t in ztpl["texts"])
             log(f"zh ocr: {zt} (raw {ztpl.get('ocr_raw')}, err {ztpl.get('ocr_error')!r})")
             log(f"zh slots: {[(int(s['x']), int(s['y']), int(s['w']), int(s['h']), s.get('radius')) for s in ztpl['slots']]}")

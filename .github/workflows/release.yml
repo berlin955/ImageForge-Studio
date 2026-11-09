@@ -119,6 +119,16 @@ jobs:
           else { Write-Host "::warning::pose model not available" }
           $global:LASTEXITCODE = 0
 
+      - name: 准备照片识别模型（只给自检用，不打进安装包）
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $d = Join-Path $env:APPDATA "ImageForge Studio\models"
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          gh release download models-v1 -R ${{ github.repository }} -p layout.onnx -D $d --clobber
+          Write-Host ("layout model: " + (Get-Item (Join-Path $d "layout.onnx")).Length + " bytes")
+
       - name: 自检（源码）
         env:
           QT_QPA_PLATFORM: offscreen

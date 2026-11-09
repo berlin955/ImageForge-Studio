@@ -851,7 +851,56 @@ class TemplatePage(QWidget):
                                            "图片 (*.jpg *.jpeg *.png *.webp *.bmp)")
         if not f:
             return
-        self.start_scan(f)
+        self.ensure_layout_model(lambda: self.start_scan(f))
+
+    def ensure_layout_model(self, then):
+        """第一次用时下载照片识别模型；不想下载也可以先用普通识别。"""
+        from .layout_model import MODEL_SHA256, MODEL_SIZE, install_downloaded, layout_model_path, model_url
+        if layout_model_path().exists() or self.cfg.data.get("layout_declined"):
+            then()
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("下载照片识别模型")
+        box.setText(f"第一次使用需要下载照片识别模型（约 {MODEL_SIZE // 1048576} MB，只下载一次）。\n\n"
+                    "有了它，深色背景、模糊照片当底色的模板也能准确找出照片框。")
+        b_dl = box.addButton("现在下载", QMessageBox.ButtonRole.AcceptRole)
+        b_skip = box.addButton("先用普通识别", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is not b_dl:
+            then()
+            return
+        from .updater import Downloader
+        dlg = QProgressDialog("正在下载照片识别模型…", "取消", 0, 100, self)
+        dlg.setWindowTitle("下载照片识别模型")
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setValue(0)
+        w = Downloader(model_url(), "layout.onnx", MODEL_SHA256, MODEL_SIZE, self)
+        self._model_dl = w
+        w.progress.connect(lambda got, tot: dlg.setValue(int(got * 100 / max(1, tot))))
+        w.status.connect(dlg.setLabelText)
+        dlg.canceled.connect(w.requestInterruption)
+
+        def done(path):
+            dlg.close()
+            try:
+                install_downloaded(path)
+                self.mw._layout = "unset"
+            except Exception as e:
+                QMessageBox.warning(self, "下载照片识别模型", f"保存模型失败：{e}")
+            then()
+
+        def failed(msg):
+            dlg.close()
+            if msg != "已取消":
+                QMessageBox.warning(self, "下载照片识别模型",
+                                    f"下载没成功：{msg}\n\n这次先用普通识别；下次导入模板时会再试。"
+                                    "也可以在「设置 → 更新」里换一条下载线路。")
+            then()
+
+        w.done.connect(done)
+        w.failed.connect(failed)
+        w.start()
 
     # ---------------------------------------------------------------- 导入动画
     def start_scan(self, path: str, replace: dict | None = None):
