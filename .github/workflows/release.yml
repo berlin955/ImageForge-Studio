@@ -1,0 +1,121 @@
+name: 构建与发布
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 版本号
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $v = "${{ github.ref_name }}".TrimStart("v")
+            python tools/set_version.py $v
+          } else {
+            $v = python -c "import re;print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('app/maskforge/__init__.py', encoding='utf-8').read()).group(1))"
+          }
+          "APP_VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "version $v"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-build.txt
+
+      - name: 准备识别模型和图标
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python tools/fetch_model.py
+          python tools/make_icon.py
+
+      - name: 自检（源码）
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python app/main.py --selftest
+
+      - name: 打包 exe
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean --windowed --name MaskForge `
+            --icon assets/icon.ico `
+            --add-data "models;models" `
+            --add-data "assets;assets" `
+            --paths app `
+            --collect-binaries onnxruntime `
+            --exclude-module tkinter `
+            app/main.py
+
+      - name: 自检（打包后的 exe）
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $log = Join-Path $PWD "selftest-exe.log"
+          $p = Start-Process -FilePath "dist\MaskForge\MaskForge.exe" -ArgumentList "--selftest","--selftest-log",$log -Wait -PassThru
+          if (Test-Path $log) { Get-Content $log -Encoding utf8 } else { Write-Host "no log" }
+          if ($p.ExitCode -ne 0) { Write-Error "exe selftest failed: $($p.ExitCode)"; exit 1 }
+
+      - name: 制作安装程序
+        shell: pwsh
+        run: |
+          $iscc = Get-Command iscc.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+          if (-not $iscc) {
+            foreach ($c in @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe")) {
+              if (Test-Path $c) { $iscc = $c; break }
+            }
+          }
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress | Out-Null
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          Write-Host "ISCC: $iscc"
+          $innoDir = Split-Path $iscc
+          $isl = @("$innoDir\Languages\ChineseSimplified.isl", "$innoDir\Languages\Unofficial\ChineseSimplified.isl") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $isl) {
+            try {
+              Invoke-WebRequest "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl" -OutFile "installer\ChineseSimplified.isl"
+              $isl = (Resolve-Path "installer\ChineseSimplified.isl").Path
+            } catch { Write-Host "Chinese language file not available, using English" }
+          }
+          $isccArgs = @("/DMyAppVersion=$env:APP_VERSION")
+          if ($isl) { $isccArgs += "/DChineseIsl=$isl"; Write-Host "language: $isl" }
+          & $iscc @isccArgs "installer\MaskForge.iss"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Compress-Archive -Path "dist\MaskForge\*" -DestinationPath "dist-installer\MaskForge-Studio-Portable-$env:APP_VERSION.zip"
+          Get-ChildItem dist-installer
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MaskForge-Studio-${{ env.APP_VERSION }}
+          path: dist-installer/*
+          retention-days: 14
+
+      - name: 发布 Release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/release_notes.py $env:APP_VERSION notes.md
+          gh release create "${{ github.ref_name }}" (Get-ChildItem dist-installer\*).FullName `
+            --title "智能打码工坊 v$env:APP_VERSION" --notes-file notes.md

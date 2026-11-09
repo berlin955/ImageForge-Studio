@@ -1,0 +1,2 @@
+pyinstaller==6.10.0
+nudenet>=3.4,<4

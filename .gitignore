@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+build/
+dist/
+dist-installer/
+*.spec
+models/*.onnx
+assets/icon.ico
+assets/icon.png
+.venv/
+venv/
+notes.md
+selftest*.log
