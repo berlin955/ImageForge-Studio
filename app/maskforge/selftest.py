@@ -107,6 +107,92 @@ def run_selftest(log_path: str | None = None) -> int:
         mw.undo()
         mw.redo()
         log(f"editor ok: {len(doc.layers)} layers")
+
+        # ---- 模拟真实操作：拖动很小的码、按住方向键 ----
+        from PySide6.QtCore import QEvent, QPoint
+        from PySide6.QtGui import QKeyEvent
+        from PySide6.QtTest import QTest
+        src2 = tmp / "测试 图片 02.jpg"
+        assert img.save(str(src2), "JPEG", 90)
+        mw.import_paths([str(src2)])
+        mw.go(0)
+        mw.resize(1400, 900)
+        mw.show()
+        mw.activateWindow()
+        app.processEvents()
+        mw.canvas.fit()
+        app.processEvents()
+        doc = mw.cur_doc()
+        mw.add_layer("areola")                     # 小码
+        L = doc.layers[-1]
+        app.processEvents()
+        s0 = mw.canvas.transform().m11()
+        vp = mw.canvas.viewport()
+        start = mw.canvas.mapFromScene(QPointF(L.cx, L.cy))
+        cx0, cy0, w0 = L.cx, L.cy, L.w
+        QTest.mousePress(vp, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+        for i in range(1, 9):
+            QTest.mouseMove(vp, start + QPoint(6 * i, 4 * i))
+            app.processEvents()
+        QTest.mouseRelease(vp, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start + QPoint(48, 32))
+        app.processEvents()
+        moved = (L.cx - cx0) * s0
+        assert abs(L.w - w0) < 1e-6, f"小码被缩放了而不是移动：{w0} -> {L.w}"
+        assert moved > 30, f"小码没有被拖动：移动了 {moved:.1f} 像素"
+        log(f"drag small mask ok: moved {moved:.0f}px on screen")
+
+        # 选中码时按住方向键（含自动重复），焦点在画布和在缩略图条两种情况
+        mw.canvas.select(L.id)
+        mw.canvas.setFocus()
+        cx1 = L.cx
+        for target in (mw.canvas, mw.film):
+            target.setFocus()
+            for i in range(40):
+                ev = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Right, Qt.KeyboardModifier.NoModifier,
+                               "", i > 0)
+                QApplication.sendEvent(target, ev)
+                if i % 5 == 0:
+                    app.processEvents()
+            QApplication.sendEvent(target, QKeyEvent(QEvent.Type.KeyRelease, Qt.Key.Key_Right,
+                                                     Qt.KeyboardModifier.NoModifier))
+            app.processEvents()
+        assert L.cx > cx1, "方向键没有移动选中的码"
+        QTest.qWait(300)
+        mw.undo()
+        mw.redo()
+        log(f"arrow nudge ok: {L.cx - cx1:.1f}")
+
+        # 没选中码时：方向键切换图片，按住不放也不会连续乱切
+        mw.canvas.select(None)
+        for i in range(30):
+            ev = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Right, Qt.KeyboardModifier.NoModifier, "", i > 0)
+            QApplication.sendEvent(mw.canvas, ev)
+            app.processEvents()
+        QTest.qWait(50)
+        assert mw.cur == 1, f"按住方向键切图异常：当前第 {mw.cur + 1} 张"
+        QApplication.sendEvent(mw.canvas, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Left, Qt.KeyboardModifier.NoModifier))
+        QTest.qWait(50)
+        assert mw.cur == 0, mw.cur
+        for f in ("check", "ok", "all"):
+            mw.set_film_filter(f)
+            QApplication.sendEvent(mw.canvas, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Right, Qt.KeyboardModifier.NoModifier))
+            app.processEvents()
+        QTest.qWait(400)
+        mw.go(0)
+        app.processEvents()
+        if mw.cur_doc().layers:
+            Lh = mw.cur_doc().layers[0]
+            QTest.mouseMove(vp, mw.canvas.mapFromScene(QPointF(Lh.cx, Lh.cy)))
+            app.processEvents()
+        mw.canvas.select(None)
+        for i in range(6):
+            mw.film.setFocus()
+            QApplication.sendEvent(mw.windowHandle(), QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Right if i % 2 == 0 else Qt.Key.Key_Left,
+                                                                Qt.KeyboardModifier.NoModifier))
+            QTest.qWait(30)
+        log("arrow navigation ok")
+        doc = mw.docs[0]
+        mw.go(0)
         theme.apply(app, "light")
         mw.apply_theme()
 
@@ -138,7 +224,7 @@ def run_selftest(log_path: str | None = None) -> int:
         assert pv is not None and pv.width() == 300, "预览图失败"
         mw._flush_thumbs()
         pd = PreviewDialog(mw)
-        assert pd.grid.count() == 1, pd.grid.count()
+        assert pd.grid.count() == len(mw.docs), (pd.grid.count(), len(mw.docs))
         pd.close()
         mw.upload_stickers  # 存在
         sid = lib.add(str(src))

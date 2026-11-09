@@ -355,7 +355,8 @@ class MainWindow(QMainWindow):
     def _shortcuts(self):
         for k, fn in (("Ctrl+O", self.import_dialog), ("Ctrl+E", self.export_batch),
                       ("Ctrl+Z", self.undo), ("Ctrl+Y", self.redo), ("Ctrl+Shift+Z", self.redo),
-                      ("PgDown", lambda: self.go(self.cur + 1)), ("PgUp", lambda: self.go(self.cur - 1)),
+                      ("PgDown", lambda: QTimer.singleShot(0, lambda: self.go(self.cur + 1))),
+                      ("PgUp", lambda: QTimer.singleShot(0, lambda: self.go(self.cur - 1))),
                       ("Ctrl+,", self.open_settings), ("Ctrl+D", self.duplicate_layer)):
             s = QShortcut(QKeySequence(k), self)
             s.activated.connect(fn)
@@ -1184,7 +1185,11 @@ class MainWindow(QMainWindow):
             return True
         if k in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Escape):
             if obj is not self.canvas and obj is not self.canvas.viewport():
-                self.canvas.keyPressEvent(ev)
+                if k == Qt.Key.Key_Escape:
+                    self.canvas.select(None)
+                else:
+                    self.canvas.handle_arrow(k, bool(mods & Qt.KeyboardModifier.ShiftModifier),
+                                             ev.isAutoRepeat())
                 return True
         return False
 
