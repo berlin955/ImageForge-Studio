@@ -260,6 +260,15 @@ def run_selftest(log_path: str | None = None) -> int:
         mw.side.refresh()
         assert mw.side.s_layer.isVisibleTo(mw.side), "选中码后应显示码的属性"
         log("preview / stickers ok")
+        import time as _t0
+        import numpy as _npp
+        _a = _t0.monotonic()
+        _pe = mw.get_pose()
+        log(f"pose load: {_pe is not None} {_t0.monotonic() - _a:.1f}s")
+        if _pe is not None:
+            _a = _t0.monotonic()
+            _kp = _pe.keypoints(_npp.full((900, 600, 3), 200, _npp.uint8))
+            log(f"pose run: {_t0.monotonic() - _a:.2f}s -> {None if _kp is None else _kp.shape}")
         # ---- 智图工坊：功能栏、素材页、批量主图 ----
         for key in mw.page_keys:
             mw.show_page(key)
