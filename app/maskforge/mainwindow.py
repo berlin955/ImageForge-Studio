@@ -18,7 +18,7 @@ from . import APP_NAME, APP_NAME_EN, AUTHOR, __version__, theme
 from .canvas import Canvas
 from .config import IMAGE_EXTS, icon_path, model_path
 from .detector import Detector, plan_layers
-from .exporter import output_name, render_doc, save_image, unique_path
+from .exporter import output_name, render_doc, render_preview, save_image, unique_path
 from .model import IMAGE_CACHE, ImageDoc, Layer, natural_key
 from .panels import BatchPanel, EditPanel, ExportPanel
 from .updater import Downloader, UpdateChecker, is_newer, launch_installer
@@ -52,6 +52,11 @@ class MainWindow(QMainWindow):
         self.pool = QThreadPool(self)
         self.pool.setMaxThreadCount(2)
         self._thumb_tasks = []
+        self._thumb_dirty: set[str] = set()
+        self._thumb_timer = QTimer(self)
+        self._thumb_timer.setSingleShot(True)
+        self._thumb_timer.setInterval(300)
+        self._thumb_timer.timeout.connect(self._flush_thumbs)
 
         self.setWindowTitle(f"{APP_NAME}  {APP_NAME_EN}")
         self.setWindowIcon(app_icon())
@@ -334,7 +339,7 @@ class MainWindow(QMainWindow):
             it.setToolTip(str(d.path))
             it.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
             self.film.addItem(it)
-            task = ThumbTask(d.id, str(d.path), 192)
+            task = ThumbTask(d.id, str(d.path), 360)
             task.signals.done.connect(self._thumb_done)
             self._thumb_tasks.append(task)
             self.pool.start(task)
@@ -350,14 +355,43 @@ class MainWindow(QMainWindow):
         if img.isNull():
             d.error = "无法读取图片"
         else:
+            d.thumb = img
             if not d.w:
                 d.w, d.h = w, h
         row = self.docs.index(d)
-        it = self.film.item(row)
-        if it:
-            if not img.isNull():
-                it.setIcon(QIcon(QPixmap.fromImage(img)))
-            self._update_film_item(row)
+        self._set_film_icon(d)
+        self._update_film_item(row)
+
+    def thumb_for(self, d: ImageDoc) -> QImage | None:
+        if d.thumb is None and not d.error:
+            img = d.image()
+            if img is not None:
+                d.thumb = img.scaled(360, 360, Qt.AspectRatioMode.KeepAspectRatio,
+                                     Qt.TransformationMode.SmoothTransformation)
+        return d.thumb
+
+    def _set_film_icon(self, d: ImageDoc):
+        if d.thumb is None or d not in self.docs:
+            return
+        it = self.film.item(self.docs.index(d))
+        if not it:
+            return
+        img = render_preview(d, d.thumb, self.library)
+        if img is not None and not img.isNull():
+            it.setIcon(QIcon(QPixmap.fromImage(img)))
+
+    def mark_thumb_dirty(self, d: ImageDoc | None = None):
+        d = d or self.cur_doc()
+        if d:
+            self._thumb_dirty.add(d.id)
+            self._thumb_timer.start()
+
+    def _flush_thumbs(self):
+        ids, self._thumb_dirty = self._thumb_dirty, set()
+        for did in ids:
+            d = self.doc_by_id(did)
+            if d:
+                self._set_film_icon(d)
 
     def _film_text(self, d: ImageDoc) -> str:
         name = d.name if len(d.name) <= 16 else d.name[:7] + "…" + d.name[-7:]
@@ -475,6 +509,7 @@ class MainWindow(QMainWindow):
     def _refresh_doc_state(self):
         if self.cur >= 0:
             self._update_film_item(self.cur)
+            self.mark_thumb_dirty()
         d = self.cur_doc()
         if d:
             col = theme.current()[STATUS_COLORS[d.status()]] if STATUS_COLORS[d.status()] != "muted" else theme.current()["muted"]
@@ -509,6 +544,7 @@ class MainWindow(QMainWindow):
             d.push()
         fn(L)
         self.canvas.update_layer(L)
+        self.mark_thumb_dirty(d)
         if rebuild_panel:
             self.edit_panel.refresh()
 
@@ -677,6 +713,7 @@ class MainWindow(QMainWindow):
         self._det_found += len(layers)
         row = self.docs.index(d)
         self._update_film_item(row)
+        self.mark_thumb_dirty(d)
         if row == self.cur:
             self.canvas.rebuild(select_id="")
             self._refresh_doc_state()
@@ -791,15 +828,61 @@ class MainWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(out)))
         return ok
 
-    def one_click(self):
+    def auto_mask(self):
+        """一键打码：识别所有未处理的图片，完成后打开预览。"""
         if not self.docs or self.busy:
             return
-        if self._ensure_out_dir() is None:
-            return
-        self.detect(mode="pending", then=lambda: self._export(self.export_targets_all()))
+        self.detect(mode="pending", then=self.open_preview)
 
-    def export_targets_all(self) -> list[ImageDoc]:
-        return [d for d in self.docs if not d.error]
+    def open_preview(self):
+        if not self.docs:
+            return
+        self._flush_thumbs()
+        from .preview import PreviewDialog
+        dlg = PreviewDialog(self)
+        r = dlg.exec()
+        if r == PreviewDialog.EDIT and dlg.picked >= 0:
+            self.go(dlg.picked)
+            self.show_tab(1)
+        elif r == PreviewDialog.SAVE:
+            self.export_batch()
+
+    # ================================================================= 贴图
+    def upload_stickers(self) -> str | None:
+        files, _ = QFileDialog.getOpenFileNames(self, "选择码图（透明背景的 PNG 最好）",
+                                                self.cfg["last_dir"], "图片 (*.png *.webp *.jpg *.jpeg)")
+        if not files:
+            return None
+        last, bad = None, []
+        for f in files:
+            try:
+                last = self.library.add(f)
+            except Exception as e:
+                bad.append(f"{Path(f).name}：{e}")
+        self.on_library_changed()
+        if bad:
+            QMessageBox.warning(self, "部分码图没有加入", "\n".join(bad))
+        if last:
+            self.status.showMessage(f"已加入 {len(files) - len(bad)} 张码图", 5000)
+        return last
+
+    def apply_part_style(self, part: str):
+        """把某个部位的默认样式应用到所有图片上已有的该部位的码。"""
+        p = self.cfg.part(part)
+        n = 0
+        for d in self.docs:
+            hit = [l for l in d.layers if l.part == part]
+            if not hit:
+                continue
+            d.push()
+            for l in hit:
+                l.style, l.sticker, l.color, l.block = p["style"], p["sticker"], p["color"], p["block"]
+                n += 1
+            self.mark_thumb_dirty(d)
+        self.canvas.rebuild()
+        self.edit_panel.refresh()
+        from .config import PART_NAMES
+        self.status.showMessage(f"已更新 {n} 个「{PART_NAMES.get(part, part)}」的码", 5000)
 
     # ================================================================= 设置与主题
     def open_settings(self):
@@ -810,12 +893,16 @@ class MainWindow(QMainWindow):
 
     def on_settings_changed(self):
         self.batch_panel.sync_from_cfg()
+        self.batch_panel.reload_stickers()
         self.export_panel.load()
         self.edit_panel.refresh()
 
     def on_library_changed(self):
         self.edit_panel.reload_stickers()
+        self.batch_panel.reload_stickers()
         self.canvas.viewport().update()
+        for d in self.docs:
+            self.mark_thumb_dirty(d)
 
     def apply_theme(self):
         app = QApplication.instance()

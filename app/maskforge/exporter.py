@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QImage, QImageWriter, QPainter
@@ -71,6 +72,18 @@ def render_doc(doc: ImageDoc, image: QImage, library, ex: dict) -> QImage:
     p.end()
     scene.clear()
     return out
+
+
+def render_preview(doc: ImageDoc, thumb: QImage | None, library) -> QImage | None:
+    """在缩略图上画出码，用于预览和缩略图条，不需要读原图。"""
+    if thumb is None or thumb.isNull() or not doc.w:
+        return thumb
+    t = thumb.width() / doc.w
+    layers = [L.clone(cx=L.cx * t, cy=L.cy * t, w=L.w * t, h=L.h * t) for L in doc.layers]
+    if not layers:
+        return thumb
+    fake = SimpleNamespace(layers=layers)
+    return render_doc(fake, thumb, library, {"mode": "none", "format": "png"})
 
 
 def save_image(img: QImage, path: Path, ex: dict) -> None:

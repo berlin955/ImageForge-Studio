@@ -53,7 +53,7 @@ def run_selftest(log_path: str | None = None) -> int:
         assert mp.exists(), f"模型不存在: {mp}"
         det = Detector(mp)
         dets = det.detect(img, 0.25)
-        log(f"detector ok: input={det.size}, detections={len(dets)}")
+        log(f"detector ok: model={mp.name} input={det.size}, detections={len(dets)}")
         fake = [
             {"label": "FEMALE_BREAST_EXPOSED", "score": 0.8, "box": (400, 400, 560, 560)},
             {"label": "FEMALE_BREAST_EXPOSED", "score": 0.8, "box": (640, 400, 800, 560)},
@@ -64,6 +64,11 @@ def run_selftest(log_path: str | None = None) -> int:
         parts = sorted(l.part for l in planned)
         assert parts == ["areola", "areola", "crack", "lower"], parts
         log(f"planner ok: {parts}")
+        cov = plan_layers([{"label": "BUTTOCKS_COVERED", "score": 0.6, "box": (400, 1050, 800, 1350), "crack_x": 640.0},
+                           {"label": "FEMALE_BREAST_COVERED", "score": 0.6, "box": (400, 400, 560, 560)}],
+                          1200, 1600, cfg)
+        assert [l.part for l in cov] == ["crack"] and abs(cov[0].cx - 640) < 1, [(l.part, l.cx) for l in cov]
+        log("planner covered ok")
 
         theme.apply(app, "dark")
         mw = MainWindow(cfg, lib)
@@ -107,6 +112,21 @@ def run_selftest(log_path: str | None = None) -> int:
         assert a.pixelColor(600, 800) != b.pixelColor(600, 800) or a.pixelColor(100, 100) != b.pixelColor(100, 100), "打码没有生效"
         log("mask applied ok")
 
+        from .exporter import render_preview
+        from .preview import PreviewDialog
+        mw._thumb_done(doc.id, doc.image().scaled(300, 400), 1200, 1600)
+        pv = render_preview(doc, doc.thumb, lib)
+        assert pv is not None and pv.width() == 300, "预览图失败"
+        mw._flush_thumbs()
+        pd = PreviewDialog(mw)
+        assert pd.grid.count() == 1, pd.grid.count()
+        pd.close()
+        mw.upload_stickers  # 存在
+        sid = lib.add(str(src))
+        assert lib.exists(sid)
+        mw.on_library_changed()
+        mw.batch_panel.sync_from_cfg()
+        log("preview / stickers ok")
         from .settings import SettingsDialog
         dlg = SettingsDialog(mw)
         dlg.close()

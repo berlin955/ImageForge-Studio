@@ -15,20 +15,23 @@ from .widgets import (Card, ColorButton, Segmented, SliderRow, button, muted, ro
                       scroll_page)
 
 
+
 # ---------------------------------------------------------------- 批量处理
 class BatchPanel(QWidget):
+    MAIN_PARTS = [p for p in PARTS if p[0] != "custom"]
+
     def __init__(self, mw):
         super().__init__()
         self.mw = mw
         cfg = mw.cfg
+        self._loading = False
 
-        # 素材
-        c1 = Card("素材")
+        # 1 素材
+        c1 = Card("① 导入图片")
         self.stat = QLabel("还没有导入图片")
         self.stat.setObjectName("Stat")
-        self.stat_sub = muted("支持 JPG / PNG / WebP / BMP / TIFF，也可以直接拖进右侧窗口")
         c1.add(self.stat)
-        c1.add(self.stat_sub)
+        c1.add(muted("支持 JPG / PNG / WebP / BMP / TIFF，也可以直接把图片或文件夹拖进右侧窗口。"))
         b_files = button("导入图片…", tip="Ctrl+O")
         b_dir = button("导入文件夹…")
         b_files.clicked.connect(mw.import_dialog)
@@ -40,30 +43,51 @@ class BatchPanel(QWidget):
         b_clear.clicked.connect(mw.clear_all)
         c1.add(row(b_rm, b_clear))
 
-        # 自动识别
-        c2 = Card("自动识别")
-        c2.add(muted("在本机用 AI 模型找出要打码的部位，按「设置 → 识别与打码」里的样式自动贴码。"))
-        self.part_checks = {}
-        g = QGridLayout()
-        g.setSpacing(6)
-        for i, (k, n) in enumerate([p for p in PARTS if p[0] != "custom"]):
+        # 2 打码样式
+        c2 = Card("② 打码样式")
+        c2.add(muted("勾选要自动打码的部位，并选择用什么码。选「贴图」时可以用你自己上传的码图。"))
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 1)
+        self.part_checks, self.style_combos, self.stk_combos = {}, {}, {}
+        for r, (k, n) in enumerate(self.MAIN_PARTS):
             cb = QCheckBox(n)
-            cb.setChecked(cfg.part(k).get("enabled", True))
-            cb.toggled.connect(lambda on, key=k: self._toggle_part(key, on))
-            self.part_checks[k] = cb
-            g.addWidget(cb, 0, i)
-        c2.add(g)
-        self.sens = SliderRow("灵敏度", 20, 85, 0, "%")
-        self.sens.set_value(self._thr_to_sens(cfg["detect"]["threshold"]))
+            cb.setMinimumWidth(64)
+            cb.toggled.connect(lambda on, key=k: self._part_set(key, "enabled", on))
+            st = QComboBox()
+            for sk, sn in STYLES:
+                st.addItem(sn, sk)
+            st.currentIndexChanged.connect(lambda _i, key=k: self._style_changed(key))
+            sc = QComboBox()
+            sc.setIconSize(QSize(22, 22))
+            sc.currentIndexChanged.connect(lambda _i, key=k: self._sticker_changed(key))
+            grid.addWidget(cb, r, 0)
+            grid.addWidget(st, r, 1)
+            grid.addWidget(sc, r, 2)
+            self.part_checks[k], self.style_combos[k], self.stk_combos[k] = cb, st, sc
+        c2.add(grid)
+        b_up = button("上传自己的码图…", "", "透明背景的 PNG 效果最好，可以一次选多张")
+        b_up.clicked.connect(self._upload)
+        b_apply = button("应用到已打的码", "", "把上面的样式换到所有图片上已有的码")
+        b_apply.clicked.connect(self._apply_all)
+        c2.add(row(b_up, b_apply))
+        c2.add(muted("码的大小、马赛克颗粒等更多选项在左下角「设置 → 识别与打码」。"))
+
+        # 3 一键打码
+        c3 = Card("③ 一键打码")
+        c3.add(muted("AI 在本机识别所有未处理的图片并贴码，完成后打开预览，可以逐张检查再保存。"))
+        self.sens = SliderRow("灵敏度", 20, 90, 0, "%")
         self.sens.valueChanged.connect(self._sens_changed)
-        c2.add(self.sens)
-        c2.add(muted("灵敏度越高越容易检出，但也更容易误判。"))
-        self.b_detect = button("识别未处理的图片", "Primary")
-        self.b_detect.clicked.connect(lambda: mw.detect(mode="pending"))
+        c3.add(self.sens)
+        self.b_auto = button("一键打码", "Primary")
+        self.b_auto.setMinimumHeight(40)
+        self.b_auto.clicked.connect(mw.auto_mask)
+        c3.add(self.b_auto)
         self.b_redetect = button("全部重新识别")
-        self.b_redetect.clicked.connect(lambda: mw.detect(mode="all"))
-        c2.add(self.b_detect)
-        c2.add(self.b_redetect)
+        self.b_redetect.clicked.connect(lambda: mw.detect(mode="all", then=mw.open_preview))
+        c3.add(self.b_redetect)
         self.prog = QProgressBar()
         self.prog.setRange(0, 100)
         self.prog.hide()
@@ -72,83 +96,125 @@ class BatchPanel(QWidget):
         self.b_stop = button("停止")
         self.b_stop.hide()
         self.b_stop.clicked.connect(mw.stop_detect)
-        c2.add(self.prog)
-        c2.add(row(self.prog_txt, None, self.b_stop))
+        c3.add(self.prog)
+        c3.add(row(self.prog_txt, None, self.b_stop))
 
-        # 一键完成
-        c3 = Card("一键完成")
-        c3.add(muted("自动识别所有未处理的图片，然后按「导出」里的尺寸和格式批量保存。适合姿势规整、不需要逐张审核的批次。"))
-        self.out_lbl = muted("")
-        b_out = button("更改…")
-        b_out.clicked.connect(mw.choose_out_dir)
-        c3.add(row(self.out_lbl, None, b_out))
-        self.b_one = button("一键打码并保存", "Primary")
-        self.b_one.setObjectName("Primary")
-        self.b_one.setMinimumHeight(40)
-        self.b_one.clicked.connect(mw.one_click)
-        c3.add(self.b_one)
-
-        # 审核
-        c4 = Card("审核")
+        # 4 预览与保存
+        c4 = Card("④ 预览并保存")
         self.review = QLabel("")
         self.review.setWordWrap(True)
         c4.add(self.review)
-        b_ok = button("确认并下一张", "Primary", "Enter")
-        b_ok.clicked.connect(mw.confirm_next)
-        b_next = button("跳到下一张待审核")
+        self.b_preview = button("预览全部效果")
+        self.b_preview.clicked.connect(mw.open_preview)
+        b_next = button("逐张审核")
         b_next.clicked.connect(mw.next_pending)
-        c4.add(b_ok)
-        c4.add(b_next)
-        c4.add(muted("提示：状态为「未检出」的图片模型没找到部位，建议逐张看一眼。"))
+        c4.add(row(self.b_preview, b_next))
+        self.out_lbl = muted("")
+        b_out = button("更改…")
+        b_out.clicked.connect(mw.choose_out_dir)
+        c4.add(row(self.out_lbl, None, b_out))
+        self.b_save = button("保存全部", "Primary")
+        self.b_save.setMinimumHeight(40)
+        self.b_save.clicked.connect(mw.export_batch)
+        c4.add(self.b_save)
+        c4.add(muted("尺寸、格式和文件名在「导出」标签里设置。"))
 
         area, _ = scroll_page(c1, c2, c3, c4)
         from PySide6.QtWidgets import QVBoxLayout
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.addWidget(area)
-        self.refresh()
+        self.reload_stickers()
+        self.sync_from_cfg()
 
-    @staticmethod
-    def _thr_to_sens(t: float) -> float:
-        return round((1 - t) * 100)
-
-    def _sens_changed(self, v: float):
-        self.mw.cfg["detect"]["threshold"] = round(1 - v / 100, 3)
-        self.mw.cfg.save()
-
-    def _toggle_part(self, key, on):
-        self.mw.cfg.part(key)["enabled"] = on
-        self.mw.cfg.save()
+    # ---- 配置 ----
+    def reload_stickers(self):
+        lib = self.mw.library
+        self._loading = True
+        for k, sc in self.stk_combos.items():
+            sc.clear()
+            for sid, name in lib.items():
+                sc.addItem(QIcon(QPixmap.fromImage(lib.image(sid))), name, sid)
+            sc.setCurrentIndex(max(0, sc.findData(self.mw.cfg.part(k)["sticker"])))
+        self._loading = False
 
     def sync_from_cfg(self):
         cfg = self.mw.cfg
-        for k, cb in self.part_checks.items():
-            cb.blockSignals(True)
-            cb.setChecked(cfg.part(k).get("enabled", True))
-            cb.blockSignals(False)
-        self.sens.set_value(self._thr_to_sens(cfg["detect"]["threshold"]))
+        self._loading = True
+        for k, _n in self.MAIN_PARTS:
+            p = cfg.part(k)
+            self.part_checks[k].setChecked(p.get("enabled", True))
+            self.style_combos[k].setCurrentIndex(max(0, self.style_combos[k].findData(p["style"])))
+            self.stk_combos[k].setCurrentIndex(max(0, self.stk_combos[k].findData(p["sticker"])))
+            self._update_row(k)
+        self.sens.set_value(round((1 - cfg["detect"]["threshold"]) * 100))
+        self._loading = False
         self.refresh()
 
+    def _update_row(self, k):
+        on = self.part_checks[k].isChecked()
+        self.style_combos[k].setEnabled(on)
+        self.stk_combos[k].setEnabled(on and self.style_combos[k].currentData() == "sticker")
+
+    def _part_set(self, key, attr, v):
+        if self._loading:
+            return
+        self.mw.cfg.part(key)[attr] = v
+        self.mw.cfg.save()
+        self._update_row(key)
+
+    def _style_changed(self, key):
+        self._part_set(key, "style", self.style_combos[key].currentData())
+
+    def _sticker_changed(self, key):
+        sid = self.stk_combos[key].currentData()
+        if sid:
+            self._part_set(key, "sticker", sid)
+
+    def _sens_changed(self, v: float):
+        if self._loading:
+            return
+        self.mw.cfg["detect"]["threshold"] = round(1 - v / 100, 3)
+        self.mw.cfg.save()
+
+    def _upload(self):
+        sid = self.mw.upload_stickers()
+        if not sid:
+            return
+        # 新上传的码图直接设给还在用内置贴图的部位里第一个用「贴图」样式的
+        for k, _n in self.MAIN_PARTS:
+            p = self.mw.cfg.part(k)
+            if p["style"] == "sticker" and p.get("enabled", True):
+                p["sticker"] = sid
+                self.mw.cfg.save()
+                break
+        self.sync_from_cfg()
+
+    def _apply_all(self):
+        for k, _n in self.MAIN_PARTS:
+            self.mw.apply_part_style(k)
+
+    # ---- 状态 ----
     def refresh(self):
         docs = self.mw.docs
         n = len(docs)
-        if not n:
-            self.stat.setText("还没有导入图片")
-        else:
-            self.stat.setText(f"{n} 张图片")
+        self.stat.setText(f"{n} 张图片" if n else "还没有导入图片")
         cnt = {"todo": 0, "done": 0, "none": 0, "ok": 0, "error": 0}
         for d in docs:
             cnt[d.status()] += 1
-        self.review.setText(
-            f"已确认 {cnt['ok']}　·　待审核 {cnt['done']}　·　未检出 {cnt['none']}　·　未处理 {cnt['todo']}"
-            + (f"　·　读取失败 {cnt['error']}" if cnt["error"] else ""))
+        txt = (f"已确认 {cnt['ok']}　·　待审核 {cnt['done']}　·　未检出 {cnt['none']}　·　未处理 {cnt['todo']}"
+               + (f"　·　读取失败 {cnt['error']}" if cnt["error"] else ""))
+        self.review.setText(txt if n else "导入并打码后，在这里预览和保存。")
         out = self.mw.cfg["export"].get("dir") or ""
         self.out_lbl.setText(f"保存到：{out}" if out else "保存到：还没有选择文件夹")
         self.out_lbl.setToolTip(out)
         busy = self.mw.busy
-        self.b_detect.setEnabled(n > 0 and not busy)
+        self.b_auto.setEnabled(n > 0 and not busy)
         self.b_redetect.setEnabled(n > 0 and not busy)
-        self.b_one.setEnabled(n > 0 and not busy)
+        self.b_preview.setEnabled(n > 0 and not busy)
+        targets = self.mw.export_targets()
+        self.b_save.setEnabled(bool(targets) and not busy)
+        self.b_save.setText(f"保存全部 {len(targets)} 张" if targets else "保存全部")
 
     def set_progress(self, i: int, total: int, text: str):
         running = total > 0 and i < total
@@ -214,6 +280,9 @@ class EditPanel(QWidget):
         self.stk_list.setFixedHeight(120)
         self.stk_list.itemClicked.connect(self._sticker_changed)
         self.c3.add(self.stk_list)
+        self.b_upload = button("上传码图…", "", "上传后直接用在这个码上")
+        self.b_upload.clicked.connect(self._upload)
+        self.c3.add(self.b_upload)
 
         self.block = SliderRow("颗粒", 0.004, 0.08, 1, "%", factor=100)
         self.block.editStarted.connect(self._push)
@@ -327,6 +396,7 @@ class EditPanel(QWidget):
             self.part_combo.setCurrentIndex(max(0, self.part_combo.findData(L.part)))
             self.style_seg.set_value(L.style)
             self.stk_list.setVisible(L.style == "sticker")
+            self.b_upload.setVisible(L.style == "sticker")
             self.block.setVisible(L.style in ("mosaic", "blur"))
             self.block.lbl.setText("颗粒" if L.style == "mosaic" else "强度")
             self.color_row.setVisible(L.style == "solid")
@@ -380,6 +450,11 @@ class EditPanel(QWidget):
             return
         sid = it.data(Qt.ItemDataRole.UserRole)
         self.mw.edit_layer(lambda L: setattr(L, "sticker", sid))
+
+    def _upload(self):
+        sid = self.mw.upload_stickers()
+        if sid:
+            self.mw.edit_layer(lambda L: setattr(L, "sticker", sid), rebuild_panel=True)
 
     def _color_changed(self, c):
         self.mw.edit_layer(lambda L: setattr(L, "color", c))

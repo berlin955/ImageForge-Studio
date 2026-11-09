@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from string import Template
 
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPalette, QPen
+
+from .config import data_dir
 
 PALETTES = {
     "dark": {
@@ -83,9 +86,11 @@ QSlider::handle:horizontal { background: $fg; width: 14px; height: 14px; margin:
 QSlider::handle:horizontal:disabled { background: $muted; }
 
 QCheckBox { spacing: 8px; }
-QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid $line; border-radius: 4px; background: $card2; }
-QCheckBox::indicator:checked { background: $accent; border-color: $accent; }
+QCheckBox::indicator { width: 18px; height: 18px; border: 1px solid $muted; border-radius: 4px; background: $card2; }
 QCheckBox::indicator:hover { border-color: $accent; }
+QCheckBox::indicator:checked { background: $accent; border-color: $accent; image: url("$check"); }
+QCheckBox::indicator:checked:disabled { background: $line; border-color: $line; }
+QCheckBox:disabled { color: $muted; }
 
 QProgressBar { background: $card2; border: 1px solid $line; border-radius: 4px; max-height: 8px; min-height: 8px; text-align: center; color: transparent; }
 QProgressBar::chunk { background: $accent; border-radius: 3px; }
@@ -123,11 +128,35 @@ QProgressDialog, QMessageBox { background: $bg; }
 """)
 
 
+def _check_icon(color: str) -> str:
+    """生成对勾图片，返回给样式表用的路径。"""
+    folder = data_dir() / "ui"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"check_{color.strip('#')}_v1.png"
+    if not path.exists():
+        img = QImage(36, 36, QImage.Format.Format_ARGB32_Premultiplied)
+        img.fill(Qt.GlobalColor.transparent)
+        p = QPainter(img)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(color), 4.6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        path_ = QPainterPath(QPointF(8.5, 18.5))
+        path_.lineTo(15, 25)
+        path_.lineTo(27.5, 11)
+        p.drawPath(path_)
+        p.end()
+        img.save(str(path), "PNG")
+    return str(path).replace("\\", "/")
+
+
 def apply(app, theme_name: str) -> None:
     if theme_name not in PALETTES:
         theme_name = "dark"
     _state["name"] = theme_name
-    p = PALETTES[theme_name]
+    p = dict(PALETTES[theme_name])
+    p["check"] = _check_icon(p["accent_ink"])
     app.setStyle("Fusion")
     pal = QPalette()
     c = QColor

@@ -43,28 +43,36 @@ def data_dir() -> Path:
 
 
 def model_path() -> Path:
-    return resource_dir() / "models" / "320n.onnx"
+    """优先用精度更高的 640m 模型，没有时用 320n。"""
+    d = resource_dir() / "models"
+    for name in ("640m.onnx", "320n.onnx"):
+        if (d / name).exists():
+            return d / name
+    return d / "640m.onnx"
 
 
 def icon_path() -> Path:
     return resource_dir() / "assets" / "icon.png"
 
 
+CONFIG_VERSION = 2
+
 DEFAULTS: dict = {
+    "config_version": CONFIG_VERSION,
     "theme": "dark",
     "check_update": True,
     "skip_version": "",
     "last_dir": "",
     "detect": {
-        "threshold": 0.35,
+        "threshold": 0.25,
         "male": False,
     },
     "parts": {
-        "lower": {"enabled": True, "style": "mosaic", "sticker": "builtin:heart",
+        "lower": {"enabled": True, "covered": True, "style": "mosaic", "sticker": "builtin:heart",
                   "color": "#16171b", "block": 0.018, "scale": 1.15, "opacity": 1.0},
-        "crack": {"enabled": True, "style": "mosaic", "sticker": "builtin:bar",
+        "crack": {"enabled": True, "covered": True, "style": "mosaic", "sticker": "builtin:bar",
                   "color": "#16171b", "block": 0.016, "scale": 1.0, "opacity": 1.0},
-        "areola": {"enabled": True, "style": "sticker", "sticker": "builtin:heart",
+        "areola": {"enabled": True, "covered": False, "style": "sticker", "sticker": "builtin:heart",
                    "color": "#16171b", "block": 0.012, "scale": 1.0, "opacity": 1.0},
         "custom": {"enabled": True, "style": "blur", "sticker": "builtin:star",
                    "color": "#16171b", "block": 0.02, "scale": 1.0, "opacity": 1.0},
@@ -99,7 +107,14 @@ class Config:
         self.data = copy.deepcopy(DEFAULTS)
         try:
             if self.path.exists():
-                _merge(self.data, json.loads(self.path.read_text("utf-8")))
+                saved = json.loads(self.path.read_text("utf-8"))
+                old = int(saved.get("config_version", 1))
+                _merge(self.data, saved)
+                if old < 2:
+                    # v1.0.0 的默认灵敏度偏低，升级时改成新的默认值
+                    if abs(float(self.data["detect"].get("threshold", 0.25)) - 0.35) < 1e-6:
+                        self.data["detect"]["threshold"] = 0.25
+                self.data["config_version"] = CONFIG_VERSION
         except Exception:
             pass
 

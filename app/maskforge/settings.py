@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QF
                                QWidget)
 
 from . import APP_NAME, APP_NAME_EN, AUTHOR, REPO_URL, __version__
-from .config import PARTS, STYLES, data_dir
+from .config import PARTS, STYLES, data_dir, model_path
 from .widgets import Card, SliderRow, button, muted, row, scroll_page
 
 
@@ -111,7 +111,7 @@ class SettingsDialog(QDialog):
     # ---------------------------------------------------- 识别与打码
     def _page_detect(self):
         c1 = Card("识别")
-        self.sens = SliderRow("灵敏度", 20, 85, 0, "%")
+        self.sens = SliderRow("灵敏度", 20, 90, 0, "%")
         self.sens.set_value(round((1 - self.cfg["detect"]["threshold"]) * 100))
         self.sens.valueChanged.connect(self._sens)
         c1.add(self.sens)
@@ -132,6 +132,10 @@ class SettingsDialog(QDialog):
                 en.setChecked(p.get("enabled", True))
                 en.toggled.connect(lambda on, k=key: self._part(k, "enabled", on))
                 c.add(en)
+                cov = QCheckBox("穿着内衣 / 丁字裤 / 薄纱等有遮挡时也打码")
+                cov.setChecked(bool(p.get("covered", key != "areola")))
+                cov.toggled.connect(lambda on, k=key: self._part(k, "covered", on))
+                c.add(cov)
             else:
                 c.add(muted("手动添加的自定义码使用这里的样式。"))
             form = QFormLayout()
@@ -274,7 +278,7 @@ class SettingsDialog(QDialog):
         items = [
             ("作者", AUTHOR),
             ("项目主页", f'<a href="{REPO_URL}">{REPO_URL}</a>'),
-            ("识别模型", "NudeNet（本地运行，图片不会上传）"),
+            ("识别模型", f"NudeNet {model_path().stem}（本地运行，图片不会上传）"),
             ("运行环境", f"Python {sys.version.split()[0]} · PySide6"),
         ]
         for i, (k, v) in enumerate(items):

@@ -60,7 +60,16 @@ class Detector:
         self.size = size if isinstance(size, int) and size > 0 else 320
         self._lock = threading.Lock()
 
-    def detect(self, image: QImage, threshold: float = 0.3) -> list[dict]:
+    def _run(self, canvas: np.ndarray) -> np.ndarray:
+        blob = np.ascontiguousarray(canvas.transpose(2, 0, 1)[None])
+        with self._lock:
+            out = self.sess.run(None, {self.input_name: blob})[0]
+        o = np.squeeze(out, 0)
+        if o.shape[0] == 4 + len(LABELS) and o.shape[1] != 4 + len(LABELS):
+            o = o.T
+        return o
+
+    def detect(self, image: QImage, threshold: float = 0.25, flip_tta: bool = True) -> list[dict]:
         S = self.size
         w, h = image.width(), image.height()
         if w <= 0 or h <= 0:
@@ -73,13 +82,15 @@ class Detector:
         canvas = np.zeros((S, S, 3), np.float32)
         px, py = (S - nw) // 2, (S - nh) // 2
         canvas[py:py + nh, px:px + nw] = rgb.astype(np.float32) / 255.0
-        blob = np.ascontiguousarray(canvas.transpose(2, 0, 1)[None])
 
-        with self._lock:
-            out = self.sess.run(None, {self.input_name: blob})[0]
-        o = np.squeeze(out, 0)
-        if o.shape[0] == 4 + len(LABELS) and o.shape[1] != 4 + len(LABELS):
-            o = o.T
+        outs = [self._run(canvas)]
+        if flip_tta:
+            # 左右翻转再识别一次，合并结果，提高检出率
+            o2 = self._run(np.ascontiguousarray(canvas[:, ::-1, :]))
+            o2[:, 0] = S - o2[:, 0]
+            outs.append(o2)
+        o = np.concatenate(outs, 0)
+
         boxes, cls_scores = o[:, :4], o[:, 4:]
         cls = cls_scores.argmax(1)
         sc = cls_scores.max(1)
@@ -96,64 +107,115 @@ class Detector:
         xyxy[:, [0, 2]] = xyxy[:, [0, 2]].clip(0, w)
         xyxy[:, [1, 3]] = xyxy[:, [1, 3]].clip(0, h)
 
+        gray = rgb.astype(np.float32).mean(2)
         res = []
         for c in np.unique(cls):
+            if c >= len(LABELS):
+                continue
             idx = np.where(cls == c)[0]
             for k in _nms(xyxy[idx], sc[idx]):
                 i = idx[k]
-                if c >= len(LABELS):
-                    continue
-                res.append({"label": LABELS[int(c)], "score": float(sc[i]),
-                            "box": tuple(float(v) for v in xyxy[i])})
+                d = {"label": LABELS[int(c)], "score": float(sc[i]),
+                     "box": tuple(float(v) for v in xyxy[i])}
+                if d["label"].startswith("BUTTOCKS"):
+                    cx_ = _crack_x(gray, xyxy[i] * scale)
+                    if cx_ is not None:
+                        d["crack_x"] = cx_ / scale
+                res.append(d)
         return res
+
+
+def _crack_x(gray: np.ndarray, box) -> float | None:
+    """在臀部框里找最暗的一条竖线（股沟的阴影），返回 x 坐标（缩略图坐标）。"""
+    x1, y1, x2, y2 = [float(v) for v in box]
+    bw, bh = x2 - x1, y2 - y1
+    if bw < 12 or bh < 12:
+        return None
+    H, W = gray.shape
+    r0, r1 = int(max(0, y1 + bh * 0.15)), int(min(H, y1 + bh * 0.75))
+    c0, c1 = int(max(0, x1 + bw * 0.22)), int(min(W, x1 + bw * 0.78))
+    if r1 - r0 < 4 or c1 - c0 < 6:
+        return None
+    region = gray[r0:r1, c0:c1]
+    prof = region.mean(0)
+    k = max(3, int(bw * 0.06) | 1)
+    kern = np.ones(k) / k
+    sm = np.convolve(np.pad(prof, k // 2, mode="edge"), kern, mode="valid")
+    # 偏向中间：离中心越远，越需要明显更暗才会被选中
+    xs = np.arange(len(sm))
+    center = (len(sm) - 1) / 2
+    penalty = (np.abs(xs - center) / max(1.0, center)) ** 2 * (sm.std() + 1.0) * 1.2
+    j = int(np.argmin(sm + penalty))
+    # 对比不明显就不调整
+    if sm.max() - sm[j] < 6:
+        return None
+    return c0 + j + 0.5
+
+
+# 每个部位接受哪些识别结果；带 COVERED 的是「有遮挡」（丁字裤、薄纱、珍珠链等）
+PART_LABELS = {
+    "lower": {"exposed": ["FEMALE_GENITALIA_EXPOSED"], "covered": ["FEMALE_GENITALIA_COVERED"]},
+    "crack": {"exposed": ["BUTTOCKS_EXPOSED", "ANUS_EXPOSED"], "covered": ["BUTTOCKS_COVERED", "ANUS_COVERED"]},
+    "areola": {"exposed": ["FEMALE_BREAST_EXPOSED"], "covered": ["FEMALE_BREAST_COVERED"]},
+}
 
 
 def plan_layers(dets: list[dict], img_w: int, img_h: int, cfg) -> list[Layer]:
     """把模型检测框转换成各部位的码。"""
     parts = cfg["parts"]
     male = cfg["detect"].get("male", False)
+    lab2part = {}
+    for part, groups in PART_LABELS.items():
+        p = parts.get(part) or {}
+        if not p.get("enabled", True):
+            continue
+        for lab in groups["exposed"]:
+            lab2part[lab] = part
+        if p.get("covered", part != "areola"):
+            for lab in groups["covered"]:
+                lab2part[lab] = part
+    if male and parts.get("lower", {}).get("enabled", True):
+        lab2part["MALE_GENITALIA_EXPOSED"] = "lower"
+
     cands: list[Layer] = []
     for d in dets:
         lab = d["label"]
+        part = lab2part.get(lab)
+        if not part:
+            continue
         x1, y1, x2, y2 = d["box"]
         bw, bh = x2 - x1, y2 - y1
         if bw < 2 or bh < 2:
             continue
         cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-        if lab == "FEMALE_GENITALIA_EXPOSED" or (male and lab == "MALE_GENITALIA_EXPOSED"):
-            part, w, h = "lower", bw, bh
-        elif lab == "BUTTOCKS_EXPOSED":
-            # 臀部框的中间一条就是股沟
-            part, w, h = "crack", bw * 0.30, bh * 0.92
-        elif lab == "ANUS_EXPOSED":
-            part, w, h = "crack", bw * 1.3, bh * 2.2
-        elif lab == "FEMALE_BREAST_EXPOSED":
+        if part == "lower":
+            w, h = bw, bh
+            if lab.endswith("COVERED"):
+                w, h = bw * 0.85, bh * 0.85
+        elif lab.startswith("ANUS"):
+            w, h = bw * 1.3, bh * 2.2
+        elif part == "crack":
+            # 臀部框里的股沟：一条竖长的区域，位置按阴影微调
+            cx = d.get("crack_x", cx)
+            w, h = bw * 0.26, bh * 0.82
+            cy = y1 + bh * 0.47
+        else:  # areola
             s = min(bw, bh) * 0.44
-            part, w, h = "areola", s, s
+            w, h = s, s
             cy = y1 + bh * 0.56
-        else:
-            continue
-        p = parts.get(part)
-        if not p or not p.get("enabled", True):
-            continue
+        p = parts[part]
         k = float(p.get("scale", 1.0))
         cands.append(Layer(part=part, style=p["style"], sticker=p["sticker"], color=p["color"],
                            block=p["block"], opacity=p.get("opacity", 1.0),
                            cx=cx, cy=cy, w=max(6.0, w * k), h=max(6.0, h * k),
                            auto=True, score=d["score"]))
 
-    # 同一部位重叠的结果只保留面积较大的
-    cands.sort(key=lambda l: l.w * l.h, reverse=True)
+    # 同一部位重叠的结果只保留分数高的
+    cands.sort(key=lambda l: l.score, reverse=True)
     kept: list[Layer] = []
     for l in cands:
-        dup = False
-        for k in kept:
-            if k.part != l.part:
-                continue
-            dist = math.hypot(k.cx - l.cx, k.cy - l.cy)
-            if dist < 0.5 * max(k.w, k.h, l.w, l.h):
-                dup = True
-                break
+        dup = any(k.part == l.part and math.hypot(k.cx - l.cx, k.cy - l.cy) < 0.5 * max(k.w, k.h, l.w, l.h)
+                  for k in kept)
         if not dup:
             kept.append(l)
     kept.sort(key=lambda l: (l.cy, l.cx))

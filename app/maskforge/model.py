@@ -96,6 +96,7 @@ class ImageDoc:
         self.w = 0
         self.h = 0
         self.layers: list[Layer] = []
+        self.thumb: QImage | None = None     # 长边约 360px 的缩略图
         self.detected = False
         self.confirmed = False
         self.error = ""
