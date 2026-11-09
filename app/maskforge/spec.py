@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import time
 import uuid
 from pathlib import Path
 
@@ -460,6 +461,7 @@ class SpecView(QGraphicsView):
 class TemplateWorker(QThread):
     done = Signal(dict)
     failed = Signal(str)
+    stage = Signal(str)
 
     def __init__(self, path: str, get_detector, kind: str = "spec", parent=None):
         super().__init__(parent)
@@ -467,11 +469,12 @@ class TemplateWorker(QThread):
 
     def run(self):
         try:
+            self.stage.emit("正在加载识别模型")
             try:
                 det = self.get_detector()
             except Exception:
                 det = None
-            self.done.emit(build_template(self.path, det, kind=self.kind))
+            self.done.emit(build_template(self.path, det, kind=self.kind, progress=self.stage.emit))
         except Exception as e:
             self.failed.emit(str(e))
 
@@ -492,6 +495,7 @@ class TemplatePage(QWidget):
         self.edit_mode = False
         self.exporting = False
         self.dirty = False
+        self.scanning = False
         self._film_ids: list[str] = []
         self._loading = False
 
@@ -749,30 +753,78 @@ class TemplatePage(QWidget):
                                            "图片 (*.jpg *.jpeg *.png *.webp *.bmp)")
         if not f:
             return
-        dlg = QProgressDialog("正在识别照片框和文字…（第一次会慢一点）", None, 0, 0, self)
-        dlg.setWindowTitle("导入模板")
-        dlg.setWindowModality(Qt.WindowModality.WindowModal)
-        dlg.setMinimumDuration(0)
-        dlg.show()
-        w = TemplateWorker(f, self.mw.get_detector, self.kind, self)
+        self.start_scan(f)
+
+    # ---------------------------------------------------------------- 导入动画
+    def start_scan(self, path: str):
+        from .model import load_qimage
+        from .scanfx import ScanOverlay, ScanStatus
+        img = load_qimage(path)
+        if img is None:
+            QMessageBox.warning(self, "导入失败", "读取不了这张图片")
+            return
+        self.scanning = True
+        self.set_edit_mode(False)
+        self.tpl = None
+        sc = self.view.scene()
+        old = list(sc.items())
+        for it in old:
+            sc.removeItem(it)
+        self._grave = old
+        QTimer.singleShot(0, lambda: setattr(self, "_grave", []))
+        self.slot_items, self.text_items = {}, {}
+        self.stack.setCurrentIndex(1)
+        bg = ImageItem()
+        bg.set_image(img)
+        sc.addItem(bg)
+        r = QRectF(0, 0, img.width(), img.height())
+        sc.setSceneRect(r)
+        pal = theme.current()
+        ov = ScanOverlay(r, pal["accent"], self.view_scale,
+                         lambda s: slot_path(s, QRectF(s["x"], s["y"], s["w"], s["h"])))
+        sc.addItem(ov)
+        self._scan = ov
+        if not hasattr(self, "scan_status"):
+            self.scan_status = ScanStatus(self.view)
+        self.scan_status.style_for(pal["accent"])
+        self.scan_status.show_text("正在准备")
+        QTimer.singleShot(0, self.view.fit)
+        self._scan_started = time.monotonic()
+        self._update_side()
+        w = TemplateWorker(path, self.mw.get_detector, self.kind, self)
         self._tw = w
-
-        def ok(tpl):
-            dlg.close()
-            self.reload_templates(select=tpl["id"])
-            n_s, n_t = len(tpl["slots"]), len(tpl["texts"])
-            self.b_edit.setChecked(True)
-            QMessageBox.information(self, "模板已生成",
-                                    f"找到 {n_s} 个图片位、{n_t} 段文字。\n\n现在是「调整模板」状态：检查一下图片位的范围，"
-                                    "不对的可以拖动边角调整，或者在空白处拖出新的图片位。没问题后点「保存模板」。")
-
-        def fail(msg):
-            dlg.close()
-            QMessageBox.warning(self, "导入失败", msg)
-
-        w.done.connect(ok)
-        w.failed.connect(fail)
+        w.stage.connect(lambda m: self.scan_status.show_text(m))
+        w.done.connect(self._scan_done)
+        w.failed.connect(self._scan_failed)
         w.start()
+
+    def _scan_done(self, tpl: dict):
+        # 至少扫一会儿再出结果，不然动画一闪而过
+        wait = max(0, int((1.4 - (time.monotonic() - self._scan_started)) * 1000))
+        QTimer.singleShot(wait, lambda: self._scan_reveal(tpl))
+
+    def _scan_reveal(self, tpl: dict):
+        n_s, n_t = len(tpl["slots"]), len(tpl["texts"])
+        self.scan_status.show_text(f"找到 {n_s} 个照片位、{n_t} 段文字", animate=False)
+        self._scan.reveal(tpl["slots"], tpl["texts"], lambda: self._scan_finish(tpl))
+
+    def _scan_finish(self, tpl: dict):
+        self.scanning = False
+        self._scan.stop()
+        self.scan_status.finish()
+        self.reload_templates(select=tpl["id"])
+        self.b_edit.setChecked(True)
+        self.mw.status.showMessage(
+            f"模板已生成：{len(tpl['slots'])} 个图片位、{len(tpl['texts'])} 段文字。"
+            "检查一下图片位，不对的拖动边角调整，没问题后点「保存模板」。", 12000)
+
+    def _scan_failed(self, msg: str):
+        self.scanning = False
+        if getattr(self, "_scan", None):
+            self._scan.stop()
+        self.scan_status.finish()
+        self.reload_templates()
+        QMessageBox.warning(self, "导入失败", msg)
 
     def save_current_template(self):
         if not self.tpl:

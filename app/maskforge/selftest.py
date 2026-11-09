@@ -392,6 +392,21 @@ def run_selftest(log_path: str | None = None) -> int:
         path = sp.export_current()
         assert path and Path(path).exists(), path
         log(f"spec export ok: {Path(path).name}")
+        # ---- 导入动画：扫描 → 照片框描边 → 进入模板 ----
+        import time as _time
+        n_before = len(load_templates("spec"))
+        sp.start_scan(str(tpl_src))
+        t_start = _time.monotonic()
+        frames = 0
+        while sp.scanning and _time.monotonic() - t_start < 120:
+            app.processEvents()
+            if frames < 40:
+                sp.view.grab()        # 强制画几帧，检查动画绘制不出错
+                frames += 1
+            _time.sleep(0.02)
+        assert not sp.scanning, "导入动画没有结束"
+        assert sp.tpl and len(sp.tpl["slots"]) == 2 and len(load_templates("spec")) == n_before + 1, sp.tpl
+        log(f"scan animation ok: {frames} frames, {_time.monotonic() - t_start:.1f}s")
         # ---- 智能详情：长图模板（分段照片 + 文字），按宽度导出并切片 ----
         rng = _np.random.default_rng(7)
         H_ = 4200

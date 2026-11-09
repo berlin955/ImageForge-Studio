@@ -394,7 +394,7 @@ def rgb_to_qimage(rgb: np.ndarray) -> QImage:
 
 
 # ================================================================ 生成 / 保存模板
-def build_template(path: str, detector, name: str = "", kind: str = "spec") -> dict:
+def build_template(path: str, detector, name: str = "", kind: str = "spec", progress=None) -> dict:
     """分析一张规格图，生成模板并保存，返回模板数据。"""
     from .model import load_qimage
     img = load_qimage(path)
@@ -402,14 +402,19 @@ def build_template(path: str, detector, name: str = "", kind: str = "spec") -> d
         raise ValueError("读取不了这张图片")
     rgb = qimage_to_rgb(img)
     H, W = rgb.shape[:2]
+    say = progress or (lambda _m: None)
+    say("正在识别模特")
     dets = detect_tiled(detector, img, 0.2)
+    say("正在识别文字")
     ocr = run_ocr(rgb)
     boxes = []
     for item in ocr:
         pts = np.array(item[0], dtype=np.float32)
         boxes.append((*pts.min(0), *pts.max(0)))
+    say("正在寻找照片边框")
     slots = find_slots(rgb, dets, blocks=(kind == "detail"), text_boxes=boxes)
     texts, mask = find_texts(rgb, slots, ocr=ocr)
+    say("正在擦除原来的文字")
     clean = erase(rgb, mask)
     tid = uuid.uuid4().hex[:10]
     folder = templates_dir() / tid
