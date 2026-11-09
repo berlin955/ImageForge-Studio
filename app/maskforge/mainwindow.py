@@ -295,8 +295,10 @@ class MainWindow(QMainWindow):
         self.main_page = MainImagePage(self)
         self.spec_page = SpecPage(self)
         self.detail_page = DetailPage(self)
+        from .template_lib import TemplatesPage
+        self.templates_page = TemplatesPage(self)
         built = {"assets": self.assets_page, "mask": self.mask_page, "main": self.main_page,
-                 "spec": self.spec_page, "detail": self.detail_page}
+                 "spec": self.spec_page, "detail": self.detail_page, "templates": self.templates_page}
         soon = {
             "spec": ("智能规格", "导入一张喜欢的规格图，自动挖空原来的模特照片、识别文字，换成你的模特图，文字可以随时修改。"),
             "detail": ("智能详情", "和智能规格一样换模特、改文字，支持很长的详情图，导出时可以自动切成几段。"),
@@ -860,6 +862,8 @@ class MainWindow(QMainWindow):
                          float(self.cfg["detect"]["threshold"]), self.get_detector, self)
         w.progress.connect(self._det_progress)
         w.result.connect(self._det_result)
+        w.get_pose = self.get_pose
+        w.facing.connect(self._det_facing)
         w.failed.connect(self._det_failed)
         w.fatal.connect(self._det_fatal)
         w.finished.connect(self._det_finished)
@@ -871,7 +875,8 @@ class MainWindow(QMainWindow):
         if self.busy:
             return
         targets = [d for d in self.docs if not d.error and
-                   ((d.subject is None and not d.detected) or (labels and d.labels is None))]
+                   ((d.subject is None and not d.detected) or
+                    (labels and (d.labels is None or (d.facing is None and self.has_pose()))))]
         if not targets:
             if then:
                 then()
@@ -885,6 +890,8 @@ class MainWindow(QMainWindow):
         w = DetectWorker([(d.id, str(d.path), d.name) for d in targets],
                          float(self.cfg["detect"]["threshold"]), self.get_detector, self)
         w.result.connect(self._det_result)
+        w.get_pose = self.get_pose
+        w.facing.connect(self._det_facing)
         w.failed.connect(self._det_failed)
         w.fatal.connect(self._det_fatal)
         w.finished.connect(self._det_finished)
@@ -899,6 +906,28 @@ class MainWindow(QMainWindow):
 
     def _det_progress(self, i, n, name):
         self.side.set_progress(i, n, f"正在识别 {i + 1}/{n}　{name}" if i < n else "")
+
+    def get_pose(self):
+        """姿态模型（判断正面 / 背面）。没有模型或加载失败时返回 None，不影响其他功能。"""
+        with self._det_lock:
+            if getattr(self, "_pose", "unset") == "unset":
+                self._pose = None
+                try:
+                    from .pose import PoseEstimator, pose_model_path
+                    if pose_model_path().exists():
+                        self._pose = PoseEstimator(pose_model_path())
+                except Exception:
+                    self._pose = None
+            return self._pose
+
+    def has_pose(self) -> bool:
+        from .pose import pose_model_path
+        return pose_model_path().exists()
+
+    def _det_facing(self, did, score):
+        d = self.doc_by_id(did)
+        if d:
+            d.facing = float(score)
 
     def _det_result(self, did, w, h, dets):
         d = self.doc_by_id(did)

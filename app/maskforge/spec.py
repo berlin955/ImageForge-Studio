@@ -655,8 +655,14 @@ class TemplatePage(QWidget):
         c0.add(self.mask_seg)
         c1 = Card("模板")
         self.tpl_combo = QComboBox()
+        self.tpl_combo.setIconSize(QSize(44, 44))
         self.tpl_combo.currentIndexChanged.connect(self._tpl_selected)
         c1.add(self.tpl_combo)
+        b_lib = button("从模板库选（看预览图）…", "", "所有保存过的模板，带预览图")
+        b_lib.clicked.connect(self.open_library)
+        b_ren = button("重命名", "Ghost")
+        b_ren.clicked.connect(self.rename_current_template)
+        c1.add(row(b_lib, None, b_ren))
         self.b_save = button("保存模板", "", "把图片位和文字的位置、样式存进模板，下次直接用")
         self.b_save.clicked.connect(self.save_current_template)
         b_del = button("删除模板", "Ghost")
@@ -771,9 +777,15 @@ class TemplatePage(QWidget):
             n_s, n_t = len(self.tpl["slots"]), len(self.tpl["texts"])
             self.review_sum.setText(f"抠空了 {n_s} 个照片位，识别出 {n_t} 段文字")
 
-    def confirm_review(self):
+    def confirm_review(self, name: str | None = None):
         if not self.tpl:
             return
+        if name is None:
+            from .template_lib import ask_name
+            name = ask_name(self, "给模板起个名字", self.tpl.get("name", ""))
+            if not name:
+                return
+        self.tpl["name"] = name
         self.tpl["confirmed"] = True
         if self.b_edit.isChecked():
             self.b_edit.setChecked(False)
@@ -804,8 +816,9 @@ class TemplatePage(QWidget):
         self.templates = load_templates(self.kind)
         self._loading = True
         self.tpl_combo.clear()
+        from .template_lib import icon_for
         for t in self.templates:
-            self.tpl_combo.addItem(t.get("name", "模板"), t["id"])
+            self.tpl_combo.addItem(icon_for(t, 44), t.get("name", "模板"), t["id"])
         self._loading = False
         sel = select or (self.tpl["id"] if self.tpl else None) or self.sc.get("last_template")
         idx = max(0, self.tpl_combo.findData(sel)) if self.templates else -1
@@ -914,6 +927,17 @@ class TemplatePage(QWidget):
         self.scan_status.finish()
         self.reload_templates()
         QMessageBox.warning(self, "导入失败", msg)
+
+    def open_library(self):
+        from .template_lib import TemplatePicker
+        dlg = TemplatePicker(self.kind, self.tpl["id"] if self.tpl else None, self)
+        dlg.exec()
+        self.reload_templates(select=dlg.result_tpl["id"] if dlg.result_tpl else None)
+
+    def rename_current_template(self):
+        from .template_lib import rename
+        if self.tpl and rename(self, self.tpl):
+            self.reload_templates(select=self.tpl["id"])
 
     def save_current_template(self):
         if not self.tpl:
@@ -1061,7 +1085,8 @@ class TemplatePage(QWidget):
             if not self.mw.docs:
                 QMessageBox.information(self, "自动填图", "先在「素材」或「智能打码」里导入这一款的模特图。")
             return
-        if any(d.labels is None and not d.error for d in self.mw.docs):
+        need = lambda d: d.labels is None or (d.facing is None and self.mw.has_pose())
+        if any(need(d) and not d.error for d in self.mw.docs):
             if self.mw.busy:
                 self.mw.status.showMessage("正在识别，请稍等…", 3000)
                 return
@@ -1069,9 +1094,13 @@ class TemplatePage(QWidget):
             self.mw.status.showMessage("正在识别哪些是正面、哪些是背面…", 4000)
             return
         docs = [d for d in self.mw.docs if not d.error]
-        fronts = [d for d in docs if d.labels and any(l in d.labels for l in FRONT)]
-        backs = [d for d in docs if d.labels and not any(l in d.labels for l in FRONT)
-                 and any(l in d.labels for l in BACK)]
+        from .pose import facing_of, facing_score
+
+        def score(d):
+            # 有姿态模型时用它的打分；没有时只按部位判断
+            return d.facing if d.facing is not None else facing_score(None, d.labels or [])
+        fronts = sorted([d for d in docs if facing_of(score(d)) == "front"], key=score, reverse=True)
+        backs = sorted([d for d in docs if facing_of(score(d)) == "back"], key=score)
         used = set()
 
         def take(pool):

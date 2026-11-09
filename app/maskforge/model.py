@@ -109,6 +109,7 @@ class ImageDoc:
         self.icon = None                     # 缩略图图标（带码），各页面共用
         self.icon_plain = None               # 缩略图图标（不带码）
         self.labels: list | None = None      # AI 识别到的部位标签，用来判断正面 / 背面
+        self.facing: float | None = None    # 正面 / 背面打分：> 0 正面，< 0 背面（姿态模型 + 部位）
         self.error = ""
         self.hist: list[list[dict]] = []
         self.fut: list[list[dict]] = []

@@ -89,6 +89,36 @@ jobs:
           if ($ok) { Write-Host ("640m model: " + (Get-Item models\640m.onnx).Length + " bytes") }
           else { Remove-Item models\640m.onnx -ErrorAction SilentlyContinue; Write-Host "::warning::640m model not available, using 320n" }
 
+      - name: 准备姿态模型（判断正面 / 背面）
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ok = $false
+          try {
+            gh release download models-v1 -R ${{ github.repository }} -p pose.onnx -D models --clobber
+            if ((Test-Path models\pose.onnx) -and (Get-Item models\pose.onnx).Length -gt 3MB) { $ok = $true }
+          } catch { Write-Host "no cached pose model" }
+          if (-not $ok) {
+            # 第一次：用 ultralytics 把 YOLOv8n-pose 导出成 onnx，存到 models-v1 里，以后直接下载
+            python -m pip install --quiet ultralytics onnx
+            Push-Location $env:RUNNER_TEMP
+            yolo export model=yolov8n-pose.pt format=onnx imgsz=640 opset=12
+            Pop-Location
+            Copy-Item (Join-Path $env:RUNNER_TEMP "yolov8n-pose.onnx") models\pose.onnx
+            if ((Get-Item models\pose.onnx).Length -gt 3MB) {
+              $ok = $true
+              gh release view models-v1 -R ${{ github.repository }} 2>$null
+              if ($LASTEXITCODE -ne 0) {
+                gh release create models-v1 -R ${{ github.repository }} --prerelease --title "识别模型（构建用）" --notes "构建时下载用的模型文件，不是软件版本。"
+              }
+              gh release upload models-v1 models\pose.onnx -R ${{ github.repository }} --clobber
+            }
+          }
+          if ($ok) { Write-Host ("pose model: " + (Get-Item models\pose.onnx).Length + " bytes") }
+          else { Write-Host "::warning::pose model not available" }
+          $global:LASTEXITCODE = 0
+
       - name: 自检（源码）
         env:
           QT_QPA_PLATFORM: offscreen

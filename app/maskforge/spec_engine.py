@@ -458,6 +458,12 @@ def build_template(path: str, detector, name: str = "", kind: str = "spec", prog
         if not ok:
             raise IOError("保存模板图片失败")
         buf.tofile(str(folder / name_))
+    th = rgb if H <= W * 1.4 else rgb[:int(W * 1.4)]
+    tw = 360
+    th = cv2.resize(th, (tw, max(1, int(th.shape[0] * tw / th.shape[1]))), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", np.ascontiguousarray(th[:, :, ::-1]), [cv2.IMWRITE_JPEG_QUALITY, 88])
+    if ok:
+        buf.tofile(str(folder / "thumb.jpg"))
     roles = ["正面", "背面"] + [f"图片{i}" for i in range(3, 100)] if kind == "spec" \
         else [f"图片{i}" for i in range(1, 200)]
     for i, s in enumerate(slots):

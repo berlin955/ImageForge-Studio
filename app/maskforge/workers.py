@@ -10,12 +10,14 @@ class DetectWorker(QThread):
     result = Signal(str, int, int, object)   # doc_id, w, h, detections
     failed = Signal(str, str)                # doc_id, message
     fatal = Signal(str)
+    facing = Signal(str, float)              # doc_id, 正面 / 背面打分
 
     def __init__(self, items: list[tuple[str, str, str]], threshold: float, get_detector, parent=None):
         super().__init__(parent)
         self.items = items              # (doc_id, path, name)
         self.threshold = threshold
         self.get_detector = get_detector
+        self.get_pose = None                 # 可选：姿态模型，用来判断正面 / 背面
 
     def run(self):
         n = len(self.items)
@@ -39,6 +41,19 @@ class DetectWorker(QThread):
                 self.failed.emit(did, f"识别出错：{e}")
                 continue
             self.result.emit(did, img.width(), img.height(), dets)
+            if self.get_pose:
+                try:
+                    pose = self.get_pose()
+                    if pose is not None:
+                        from .detector import qimage_to_rgb
+                        from .pose import facing_score
+                        small = img if max(img.width(), img.height()) <= 1280 else img.scaled(
+                            1280, 1280, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        kp = pose.keypoints(qimage_to_rgb(small))
+                        sc = facing_score(kp, [x["label"] for x in dets], float(small.width()))
+                        self.facing.emit(did, float(sc))
+                except Exception:
+                    pass
         self.progress.emit(n, n, "")
 
 

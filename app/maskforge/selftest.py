@@ -427,9 +427,44 @@ def run_selftest(log_path: str | None = None) -> int:
         log(f"scan animation ok: {frames} frames, {_time.monotonic() - t_start:.1f}s")
         assert sp.in_review() and not sp.film_bar.isVisibleTo(sp), "识别完应该先显示识别结果"
         sp.view.grab()
-        sp.confirm_review()
+        sp.confirm_review(name="测试命名模板")
+        assert sp.tpl["name"] == "测试命名模板"
+        from .template_lib import TemplatePicker, ensure_thumb
+        assert not ensure_thumb(sp.tpl).isNull(), "模板没有预览图"
+        pk = TemplatePicker("spec", sp.tpl["id"], mw)
+        assert pk.grid.count() >= 2 and pk.grid.current_tpl()["id"] == sp.tpl["id"]
+        pk.deleteLater()
+        mw.show_page("templates")
+        mw.templates_page.on_show()
+        assert mw.templates_page.grids["spec"].count() >= 2
+        mw.templates_page._use(sp.tpl)
+        assert mw.spec_page.tpl["id"] == sp.tpl["id"]
+        log("template library ok")
         assert not sp.in_review() and sp.film_bar.isVisibleTo(sp) and sp.tpl.get("confirmed")
         log("review step ok")
+        # ---- 正面 / 背面判断 ----
+        from .pose import facing_of, facing_score, pose_model_path, PoseEstimator
+        kp = _np.zeros((17, 3), _np.float32)
+        kp[5] = (300, 200, 0.9); kp[6] = (200, 200, 0.9)      # 左肩在画面右边 → 正面
+        kp[11] = (290, 400, 0.9); kp[12] = (210, 400, 0.9)
+        kp[0] = (250, 120, 0.9); kp[1] = (260, 110, 0.9); kp[2] = (240, 110, 0.9)
+        assert facing_of(facing_score(kp, [], 500)) == "front"
+        kb = kp.copy()
+        kb[[5, 6, 11, 12], 0] = kb[[6, 5, 12, 11], 0]            # 左右对调 → 背面
+        kb[0:3, 2] = 0.05
+        assert facing_of(facing_score(kb, ["BUTTOCKS_COVERED"], 500)) == "back"
+        # 回头看镜头的背面照：脸看得见，但肩、髋和臀部都说是背面
+        kt = kb.copy()
+        kt[0:3, 2] = 0.9
+        assert facing_of(facing_score(kt, ["BUTTOCKS_EXPOSED", "FACE_FEMALE"], 500)) == "back"
+        if pose_model_path().exists():
+            pe = PoseEstimator(pose_model_path())
+            blank = _np.full((600, 400, 3), 230, _np.uint8)
+            log(f"pose model ok: size {pe.size}, blank -> {pe.keypoints(blank) is None}")
+            assert mw.get_pose() is not None
+        else:
+            log("pose model missing")
+        log("facing ok")
         # ---- 中文文字识别（仿真实规格图：米色底、深色标题框、胶囊相框）----
         import os as _os
         font_file = next((f for f in (r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simsun.ttc",
