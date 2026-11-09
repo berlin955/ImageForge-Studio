@@ -257,6 +257,12 @@ def run_selftest(log_path: str | None = None) -> int:
         mw.show_page("assets")
         mw.assets_page.refresh()
         assert mw.assets_page.grid.count() == len(mw.docs), "素材页图片数量不对"
+        for k in ("s", "l", "m"):
+            mw.assets_page.set_thumb_size(k)
+            app.processEvents()
+        it0 = mw.assets_page.grid.item(0)
+        assert it0.text() == mw.docs[0].name, it0.text()
+        mw.assets_page.grid.grab()   # 实际画一遍缩略图，确认绘制不出错
         from .mainimage import compose, crop_rect_aspect
         d0 = mw.docs[0]
         d0.subject, d0.face = (300.0, 200.0, 900.0, 1500.0), (520.0, 220.0, 680.0, 400.0)

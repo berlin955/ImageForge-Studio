@@ -1,15 +1,75 @@
 """素材页和「即将推出」占位页。"""
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHBoxLayout, QLabel, QListWidget,
-                               QListWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtCore import QRect, QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHBoxLayout, QLabel, QListView,
+                               QListWidget, QListWidgetItem, QStyle, QStyledItemDelegate,
+                               QVBoxLayout, QWidget)
 
 from . import theme
 from .widgets import button, muted
 
 STATUS_KEYS = {"todo": "muted", "attention": "warn", "done": "ok", "error": "danger"}
+THUMB_SIZES = [("s", "小", 120), ("m", "中", 190), ("l", "大", 300)]
+ROLE_STATUS = Qt.ItemDataRole.UserRole + 1
+ROLE_KEY = Qt.ItemDataRole.UserRole + 2
+
+
+class ThumbDelegate(QStyledItemDelegate):
+    """素材缩略图：整张图按原比例完整显示在方格里，下面是文件名和状态。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.size = 190
+
+    def sizeHint(self, option, index):
+        return QSize(self.size + 20, self.size + 58)
+
+    def paint(self, p: QPainter, option, index):
+        pal = theme.current()
+        p.save()
+        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
+        r = QRectF(option.rect).adjusted(4, 4, -4, -4)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        hover = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        if selected or hover:
+            path = QPainterPath()
+            path.addRoundedRect(r, 10, 10)
+            p.fillPath(path, QColor(pal["hover"]))
+            if selected:
+                pen = QPen(QColor(pal["accent"]), 2)
+                p.setPen(pen)
+                p.drawPath(path)
+        S = self.size
+        box = QRectF(r.x() + (r.width() - S) / 2, r.y() + 6, S, S)
+        p.fillRect(box, QColor(pal["stage"]))
+        icon = index.data(Qt.ItemDataRole.DecorationRole)
+        if icon is not None and not icon.isNull():
+            pm = icon.pixmap(QSize(int(S * 2), int(S * 2)))
+            if not pm.isNull():
+                w, h = pm.width(), pm.height()
+                k = min(S / w, S / h)
+                dw, dh = w * k, h * k
+                p.drawPixmap(QRectF(box.x() + (S - dw) / 2, box.y() + (S - dh) / 2, dw, dh), pm,
+                             QRectF(0, 0, w, h))
+        name = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        f = QFont(option.font)
+        f.setPixelSize(12)
+        p.setFont(f)
+        fm = QFontMetrics(f)
+        tr = QRect(int(r.x() + 6), int(box.bottom() + 6), int(r.width() - 12), 18)
+        p.setPen(QColor(pal["fg"]))
+        p.drawText(tr, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                   fm.elidedText(name, Qt.TextElideMode.ElideMiddle, tr.width()))
+        st = index.data(ROLE_STATUS) or ""
+        if st:
+            key = index.data(ROLE_KEY) or "muted"
+            p.setPen(QColor(pal.get(key, pal["muted"])))
+            tr2 = tr.translated(0, 18)
+            p.drawText(tr2, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                       fm.elidedText(st, Qt.TextElideMode.ElideRight, tr2.width()))
+        p.restore()
 
 
 def page_header(title: str, sub: str = "") -> tuple[QFrame, QHBoxLayout]:
@@ -53,7 +113,12 @@ class AssetsPage(QWidget):
         self.b_rm.clicked.connect(self._remove_selected)
         self.b_clear = button("清空", "Ghost")
         self.b_clear.clicked.connect(mw.clear_all)
-        for w in (self.count, self.b_rm, self.b_clear, b_dir, b_files):
+        from .widgets import Segmented
+        self.size_seg = Segmented([(k, t) for k, t, _ in THUMB_SIZES])
+        self.size_seg.setFixedWidth(150)
+        self.size_seg.setToolTip("缩略图大小")
+        self.size_seg.changed.connect(self.set_thumb_size)
+        for w in (self.count, self.size_seg, self.b_rm, self.b_clear, b_dir, b_files):
             h.addWidget(w)
         v.addWidget(top)
 
@@ -85,17 +150,32 @@ class AssetsPage(QWidget):
         self.grid.setViewMode(QListWidget.ViewMode.IconMode)
         self.grid.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.grid.setMovement(QListWidget.Movement.Static)
-        self.grid.setIconSize(QSize(190, 190))
-        self.grid.setGridSize(QSize(214, 246))
-        self.grid.setSpacing(6)
+        self.delegate = ThumbDelegate(self.grid)
+        self.grid.setItemDelegate(self.delegate)
+        self.grid.setSpacing(4)
         self.grid.setUniformItemSizes(True)
-        self.grid.setWordWrap(True)
+        self.grid.setMouseTracking(True)
+        self.grid.setLayoutMode(QListView.LayoutMode.Batched)
         self.grid.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.grid.itemDoubleClicked.connect(self._open)
         bv.addWidget(self.grid, 1)
-        tip = muted("双击图片打开打码编辑。按住 Ctrl 或 Shift 可以多选。")
+        tip = muted("双击图片打开打码编辑。按住 Ctrl 或 Shift 可以多选。右上角可以切换缩略图大小。")
         bv.addWidget(tip)
         v.addWidget(body, 1)
+        key = (mw.cfg.data.get("ui") or {}).get("thumb", "m")
+        self.size_seg.set_value(key)
+        self.set_thumb_size(key, save=False)
+
+    def set_thumb_size(self, key: str, save: bool = True):
+        size = dict((k, v) for k, _t, v in THUMB_SIZES).get(key, 190)
+        self.delegate.size = size
+        self.grid.setGridSize(QSize(size + 20, size + 58))
+        self.grid.setIconSize(QSize(size, size))
+        self.grid.doItemsLayout()
+        self.grid.viewport().update()
+        if save:
+            self.mw.cfg.data.setdefault("ui", {})["thumb"] = key
+            self.mw.cfg.save()
 
     def on_show(self):
         self.refresh()
@@ -118,14 +198,23 @@ class AssetsPage(QWidget):
                 it.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
                 self.grid.addItem(it)
                 self._items[d.id] = it
-        pal = theme.current()
         for d in docs:
             it = self._items.get(d.id)
             if it:
-                name = d.name if len(d.name) <= 22 else d.name[:10] + "…" + d.name[-10:]
-                mark = "　· 已打码" if d.layers else ""
-                it.setText(name + mark)
-                it.setForeground(QColor(pal["warn"] if d.status() == "attention" else pal["fg"]))
+                it.setText(d.name)
+                st = d.status()
+                if st == "attention":
+                    it.setData(ROLE_STATUS, d.status_text())
+                    it.setData(ROLE_KEY, "warn")
+                elif d.layers:
+                    it.setData(ROLE_STATUS, f"已打码 · {len(d.layers)} 个码")
+                    it.setData(ROLE_KEY, "ok")
+                elif st == "error":
+                    it.setData(ROLE_STATUS, "读取失败")
+                    it.setData(ROLE_KEY, "danger")
+                else:
+                    it.setData(ROLE_STATUS, f"{d.w}×{d.h}" if d.w else "")
+                    it.setData(ROLE_KEY, "muted")
 
     def update_icon(self, d):
         it = self._items.get(d.id)
