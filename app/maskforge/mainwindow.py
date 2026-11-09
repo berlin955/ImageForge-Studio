@@ -960,13 +960,20 @@ class MainWindow(QMainWindow):
         dlg.setWindowTitle("更新")
         dlg.setWindowModality(Qt.WindowModality.WindowModal)
         dlg.setMinimumDuration(0)
-        dl = Downloader(info["asset_url"], info["asset_name"], self)
+        dl = Downloader(info["asset_url"], info["asset_name"], info.get("sha256", ""),
+                        int(info.get("asset_size") or 0), self)
         self._dl = dl
+
+        src = {"text": "正在下载新版本"}
 
         def prog(got, total):
             if total:
-                dlg.setValue(int(got * 100 / total))
-                dlg.setLabelText(f"正在下载新版本… {got / 1048576:.1f} / {total / 1048576:.1f} MB")
+                dlg.setValue(min(100, int(got * 100 / total)))
+                dlg.setLabelText(f"{src['text']}… {got / 1048576:.1f} / {total / 1048576:.1f} MB")
+
+        def stat(text):
+            src["text"] = text
+            dlg.setLabelText(text + "…")
 
         def done(path):
             dlg.close()
@@ -981,10 +988,24 @@ class MainWindow(QMainWindow):
 
         def fail(msg):
             dlg.close()
-            if msg != "已取消":
-                QMessageBox.warning(self, "下载失败", f"{msg}\n\n也可以去项目主页手动下载。")
+            if msg == "已取消":
+                return
+            box = QMessageBox(self)
+            box.setWindowTitle("下载失败")
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setText("新版本没有下载成功，可能是网络连不上 GitHub。")
+            box.setInformativeText(f"详细原因：{msg}\n\n可以稍后再试，或者打开下载页面手动下载安装包。")
+            b_retry = box.addButton("重试", QMessageBox.ButtonRole.AcceptRole)
+            b_page = box.addButton("打开下载页面", QMessageBox.ButtonRole.ActionRole)
+            box.addButton("关闭", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() is b_retry:
+                self._download_update(info)
+            elif box.clickedButton() is b_page:
+                QDesktopServices.openUrl(QUrl(info.get("page") or ""))
 
         dl.progress.connect(prog)
+        dl.status.connect(stat)
         dl.done.connect(done)
         dl.failed.connect(fail)
         dlg.canceled.connect(dl.requestInterruption)

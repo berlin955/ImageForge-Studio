@@ -153,6 +153,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python tools/release_notes.py $env:APP_VERSION notes.md
+          python tools/release_notes.py $env:APP_VERSION notes.md dist-installer
           gh release create "v$env:APP_VERSION" (Get-ChildItem dist-installer\*).FullName `
             --target "${{ github.sha }}" --title "智能打码工坊 v$env:APP_VERSION" --notes-file notes.md
