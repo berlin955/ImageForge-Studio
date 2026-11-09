@@ -19,6 +19,13 @@ def _draw(name: str, p: QPainter, c: QColor):
     soft.setAlphaF(0.22)
     if name == "assets":  # 叠在一起的照片
         p.drawRoundedRect(QRectF(7, 3.5, 13.5, 11), 2.2, 2.2)
+        # 前面那张照片盖住后面那张：先把前面区域擦干净
+        p.save()
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0))
+        p.drawRoundedRect(QRectF(2.6, 7.1, 15.3, 14.3), 2.8, 2.8)
+        p.restore()
         p.drawRoundedRect(QRectF(3.5, 8, 13.5, 12.5), 2.2, 2.2)
         path = QPainterPath(QPointF(5.5, 18.5))
         path.lineTo(9.3, 14.2)
