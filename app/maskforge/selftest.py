@@ -470,6 +470,12 @@ def run_selftest(log_path: str | None = None) -> int:
             sa = pg.findChild(QScrollArea)
             if sa and sa.widget():
                 log(f"panel width: content {sa.widget().minimumSizeHint().width()} / visible {sa.viewport().width()}")
+                from PySide6.QtWidgets import QWidget as _QW
+                wide = [(c.minimumSizeHint().width(), type(c).__name__, c.objectName(),
+                         (getattr(c, "text", lambda: "")() if hasattr(c, "text") else "")[:20])
+                        for c in sa.widget().findChildren(_QW) if c.minimumSizeHint().width() > 300]
+                for wdt in sorted(wide, key=lambda x: x[0])[:12]:
+                    log(f"   wide: {wdt}")
                 assert sa.widget().minimumSizeHint().width() <= sa.viewport().width() + 2, \
                     f"面板内容太宽：{sa.widget().minimumSizeHint().width()} > {sa.viewport().width()}"
         from .spec_engine import default_name
