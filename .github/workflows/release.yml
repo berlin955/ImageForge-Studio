@@ -32,7 +32,7 @@ jobs:
             $v = "${{ github.ref_name }}".TrimStart("v")
             python tools/set_version.py $v
           } else {
-            $v = python -c "import re;print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('app/maskforge/__init__.py', encoding='utf-8').read()).group(1))"
+            $v = (python tools/get_version.py).Trim()
           }
           "APP_VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "version $v"
