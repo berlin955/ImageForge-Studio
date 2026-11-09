@@ -1085,7 +1085,11 @@ class MainWindow(QMainWindow):
             return True
         if k in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Escape):
             if obj is not self.canvas and obj is not self.canvas.viewport():
-                self.canvas.keyPressEvent(ev)
+                if k == Qt.Key.Key_Escape:
+                    self.canvas.select(None)
+                else:
+                    self.canvas.handle_arrow(k, bool(mods & Qt.KeyboardModifier.ShiftModifier),
+                                             ev.isAutoRepeat())
                 return True
         return False
 

@@ -139,17 +139,28 @@ class LayerItem(QGraphicsObject):
         return path
 
     def hit(self, pos: QPointF):
+        """判断按在哪里：旋转点、四个角（缩放），还是码本身（移动）。"""
+        L = self.layer
+        inside = self.body().contains(pos)
         if self.isSelected():
             t = (HANDLE + 4) / self._s()
             rp = self._rot_pt()
             if abs(pos.x() - rp.x()) <= t and abs(pos.y() - rp.y()) <= t:
                 return "rotate"
+            # 码很小时，角的判定范围不能盖住整个码，否则只能缩放、拖不动
+            tc = t if not inside else min(t, min(L.w, L.h) * 0.22)
             for c in self._corners():
-                if abs(pos.x() - c.x()) <= t and abs(pos.y() - c.y()) <= t:
+                if abs(pos.x() - c.x()) <= tc and abs(pos.y() - c.y()) <= tc:
                     return "scale"
-        if self.body().contains(pos):
+        if inside:
             return "move"
+        if self.isSelected():
+            return "scale" if self._near_corner(pos) else None
         return None
+
+    def _near_corner(self, pos: QPointF) -> bool:
+        t = (HANDLE + 4) / self._s()
+        return any(abs(pos.x() - c.x()) <= t and abs(pos.y() - c.y()) <= t for c in self._corners())
 
     # ---- 绘制 ----
     def paint(self, p: QPainter, opt, widget=None):
@@ -293,6 +304,12 @@ class Canvas(QGraphicsView):
         self.fit_mode = True
         self._pan = None
         self._nudging = False
+        # 方向键连续微调时，停下来再通知一次，避免每一下都刷新界面和缩略图
+        from PySide6.QtCore import QTimer
+        self._nudge_timer = QTimer(self)
+        self._nudge_timer.setSingleShot(True)
+        self._nudge_timer.setInterval(120)
+        self._nudge_timer.timeout.connect(self.edited.emit)
 
         sc = QGraphicsScene(self)
         self.setScene(sc)
@@ -484,21 +501,7 @@ class Canvas(QGraphicsView):
             e.accept()
             return
         if k in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
-            L = self.selected_layer()
-            if L:
-                # 每次移动 1 个屏幕像素，按住 Shift 移动 10 个
-                step = (10 if e.modifiers() & Qt.KeyboardModifier.ShiftModifier else 1)
-                step /= max(0.02, self.ctx.view_scale)
-                if not e.isAutoRepeat():
-                    self.beginEdit.emit()
-                dx = {Qt.Key.Key_Left: -step, Qt.Key.Key_Right: step}.get(k, 0)
-                dy = {Qt.Key.Key_Up: -step, Qt.Key.Key_Down: step}.get(k, 0)
-                L.cx += dx
-                L.cy += dy
-                self.update_layer(L)
-                self.edited.emit()
-            else:
-                self.navigate.emit(-1 if k in (Qt.Key.Key_Left, Qt.Key.Key_Up) else 1)
+            self.handle_arrow(k, bool(e.modifiers() & Qt.KeyboardModifier.ShiftModifier), e.isAutoRepeat())
             e.accept()
             return
         if k == Qt.Key.Key_Escape:
@@ -506,6 +509,29 @@ class Canvas(QGraphicsView):
             e.accept()
             return
         super().keyPressEvent(e)
+
+    def handle_arrow(self, k, shift: bool, repeat: bool):
+        """方向键：选中码时微调位置，没选中时切换图片。"""
+        L = self.selected_layer()
+        if L is not None and self.doc is not None and L in self.doc.layers:
+            # 每次移动 1 个屏幕像素，按住 Shift 移动 10 个
+            step = (10 if shift else 1) / max(0.02, self.ctx.view_scale)
+            if not repeat:
+                self.beginEdit.emit()
+            if k == Qt.Key.Key_Left:
+                L.cx -= step
+            elif k == Qt.Key.Key_Right:
+                L.cx += step
+            elif k == Qt.Key.Key_Up:
+                L.cy -= step
+            elif k == Qt.Key.Key_Down:
+                L.cy += step
+            self.update_layer(L)
+            self._nudge_timer.start()
+            return
+        if repeat:
+            return  # 按住不放时不连续切图，避免一下子加载很多大图
+        self.navigate.emit(-1 if k in (Qt.Key.Key_Left, Qt.Key.Key_Up) else 1)
 
     def keyReleaseEvent(self, e):
         if e.key() == Qt.Key.Key_Space and not e.isAutoRepeat():
