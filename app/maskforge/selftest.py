@@ -21,6 +21,18 @@ def run_selftest(log_path: str | None = None) -> int:
                 pass
 
     code = 0
+    if log_path:
+        try:
+            import faulthandler
+            _fh = open(str(log_path) + ".crash", "w", encoding="utf-8")
+            faulthandler.enable(file=_fh, all_threads=True)
+            from PySide6.QtCore import qInstallMessageHandler
+
+            def _qt_msg(mode, ctx, msg):
+                log(f"[qt {int(mode.value) if hasattr(mode, 'value') else mode}] {msg}")
+            qInstallMessageHandler(_qt_msg)
+        except Exception as e:
+            log(f"faulthandler: {e}")
     try:
         from PySide6.QtCore import QPointF, Qt
         from PySide6.QtGui import QColor, QImage, QPainter, QRadialGradient

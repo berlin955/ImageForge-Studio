@@ -793,7 +793,8 @@ class TemplatePage(QWidget):
         self._update_side()
         w = TemplateWorker(path, self.mw.get_detector, self.kind, self)
         self._tw = w
-        w.stage.connect(lambda m: self.scan_status.show_text(m))
+        # 注意：后台线程发出的信号要连到界面对象的方法上（会排队到界面线程执行），不能连 lambda
+        w.stage.connect(self.scan_status.show_text)
         w.done.connect(self._scan_done)
         w.failed.connect(self._scan_failed)
         w.start()
