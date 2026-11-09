@@ -265,7 +265,8 @@ class MainWindow(QMainWindow):
     def _shortcuts(self):
         for k, fn in (("Ctrl+O", self.import_dialog), ("Ctrl+E", self.export_batch),
                       ("Ctrl+Z", self.undo), ("Ctrl+Y", self.redo), ("Ctrl+Shift+Z", self.redo),
-                      ("PgDown", lambda: self.go(self.cur + 1)), ("PgUp", lambda: self.go(self.cur - 1)),
+                      ("PgDown", lambda: QTimer.singleShot(0, lambda: self.go(self.cur + 1))),
+                      ("PgUp", lambda: QTimer.singleShot(0, lambda: self.go(self.cur - 1))),
                       ("Ctrl+,", self.open_settings), ("Ctrl+D", self.duplicate_layer)):
             s = QShortcut(QKeySequence(k), self)
             s.activated.connect(fn)

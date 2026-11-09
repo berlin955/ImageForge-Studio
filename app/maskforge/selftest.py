@@ -168,15 +168,28 @@ def run_selftest(log_path: str | None = None) -> int:
             ev = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Right, Qt.KeyboardModifier.NoModifier, "", i > 0)
             QApplication.sendEvent(mw.canvas, ev)
             app.processEvents()
+        QTest.qWait(50)
         assert mw.cur == 1, f"按住方向键切图异常：当前第 {mw.cur + 1} 张"
         QApplication.sendEvent(mw.canvas, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Left, Qt.KeyboardModifier.NoModifier))
-        app.processEvents()
+        QTest.qWait(50)
         assert mw.cur == 0, mw.cur
         for f in ("check", "ok", "all"):
             mw.set_film_filter(f)
             QApplication.sendEvent(mw.canvas, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Right, Qt.KeyboardModifier.NoModifier))
             app.processEvents()
         QTest.qWait(400)
+        mw.go(0)
+        app.processEvents()
+        if mw.cur_doc().layers:
+            Lh = mw.cur_doc().layers[0]
+            QTest.mouseMove(vp, mw.canvas.mapFromScene(QPointF(Lh.cx, Lh.cy)))
+            app.processEvents()
+        mw.canvas.select(None)
+        for i in range(6):
+            mw.film.setFocus()
+            QApplication.sendEvent(mw.windowHandle(), QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Right if i % 2 == 0 else Qt.Key.Key_Left,
+                                                                Qt.KeyboardModifier.NoModifier))
+            QTest.qWait(30)
         log("arrow navigation ok")
         doc = mw.docs[0]
         mw.go(0)

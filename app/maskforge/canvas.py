@@ -304,6 +304,12 @@ class Canvas(QGraphicsView):
         self.fit_mode = True
         self._pan = None
         self._nudging = False
+        self._graveyard: list = []
+        from PySide6.QtCore import QTimer as _QT
+        self._grave_timer = _QT(self)
+        self._grave_timer.setSingleShot(True)
+        self._grave_timer.setInterval(0)
+        self._grave_timer.timeout.connect(self._graveyard.clear)
         # 方向键连续微调时，停下来再通知一次，避免每一下都刷新界面和缩略图
         from PySide6.QtCore import QTimer
         self._nudge_timer = QTimer(self)
@@ -351,9 +357,16 @@ class Canvas(QGraphicsView):
             sel = cur.id if cur else None
         sc = self.scene()
         sc.blockSignals(True)
-        for it in self.items.values():
-            sc.removeItem(it)
+        old = list(self.items.values())
+        for it in old:
+            if it.scene() is sc:
+                sc.removeItem(it)
         self.items.clear()
+        # 旧的码不要马上释放：Qt 可能还在处理和它们有关的事件（悬停、按键），
+        # 立刻释放会导致闪退。等这一轮事件处理完再释放。
+        self._graveyard.extend(old)
+        if not self._grave_timer.isActive():
+            self._grave_timer.start()
         if self.doc and self.ctx.image is not None:
             for i, L in enumerate(self.doc.layers):
                 it = LayerItem(L, self.ctx)
@@ -531,7 +544,10 @@ class Canvas(QGraphicsView):
             return
         if repeat:
             return  # 按住不放时不连续切图，避免一下子加载很多大图
-        self.navigate.emit(-1 if k in (Qt.Key.Key_Left, Qt.Key.Key_Up) else 1)
+        # 切图会重建画布，放到按键事件处理完之后再做，避免在事件处理中途释放对象而闪退
+        d = -1 if k in (Qt.Key.Key_Left, Qt.Key.Key_Up) else 1
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self.navigate.emit(d))
 
     def keyReleaseEvent(self, e):
         if e.key() == Qt.Key.Key_Space and not e.isAutoRepeat():
