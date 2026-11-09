@@ -24,7 +24,7 @@ from .mainimage import _scaled_doc, crop_rect_aspect, doc_icon, proxy_of
 from .pages import page_header
 from .spec_engine import (build_template, delete_template, load_templates, save_template,
                           template_bg)
-from .widgets import Card, ColorButton, Segmented, button, muted, row, scroll_page
+from .widgets import Card, ColorButton, ElideLabel, Segmented, button, muted, row, scroll_page
 
 DEFAULT_FONT = "Microsoft YaHei UI"
 
@@ -744,7 +744,7 @@ class TemplatePage(QWidget):
         self.fmt = Segmented([("jpg", "JPG"), ("png", "PNG"), ("webp", "WebP")])
         self.fmt.changed.connect(lambda k: self._save_sc("format", k))
         c4.add(self.fmt)
-        self.out_lbl = muted("")
+        self.out_lbl = ElideLabel("")   # 路径太长时中间省略，不会把面板撑宽
         b_out = button("更改…")
         b_out.clicked.connect(lambda: (self.mw.choose_out_dir(), self._update_side()))
         c4.add(row(self.out_lbl, None, b_out))

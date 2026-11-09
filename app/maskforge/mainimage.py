@@ -16,7 +16,7 @@ from . import theme
 from .config import data_dir
 from .exporter import FORMATS, _render, save_image, unique_path
 from .pages import page_header
-from .widgets import Card, ColorButton, Segmented, SliderRow, button, muted, row, scroll_page
+from .widgets import Card, ColorButton, ElideLabel, Segmented, SliderRow, button, muted, row, scroll_page
 
 SIZES = [(800, "800"), (1000, "1000"), (1440, "1440"), (0, "自定义")]
 CORNERS = [("tl", "左上"), ("tr", "右上"), ("bl", "左下"), ("br", "右下")]
@@ -489,7 +489,7 @@ class MainImagePage(QWidget):
         self.fmt = Segmented([("jpg", "JPG"), ("png", "PNG"), ("webp", "WebP")])
         self.fmt.changed.connect(lambda k: self._set("format", k))
         c5.add(self.fmt)
-        self.out_lbl = muted("")
+        self.out_lbl = ElideLabel("")   # 路径太长时中间省略，不会把面板撑宽
         b_out = button("更改…")
         b_out.clicked.connect(self._choose_out)
         c5.add(row(self.out_lbl, None, b_out))

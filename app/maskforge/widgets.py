@@ -36,6 +36,39 @@ def muted(text: str, obj: str = "Muted") -> QLabel:
     return l
 
 
+class ElideLabel(QLabel):
+    """显示很长的路径：放不下时把中间省略成「…」，鼠标悬停看完整内容。不会把面板撑宽。"""
+
+    def __init__(self, text: str = "", obj: str = "Muted"):
+        super().__init__()
+        self.setObjectName(obj)
+        self._full = ""
+        from PySide6.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(10)
+        self.setText(text)
+
+    def setText(self, text: str):
+        self._full = text or ""
+        self.setToolTip(self._full)
+        self._apply()
+
+    def text(self) -> str:
+        return self._full
+
+    def _apply(self):
+        fm = self.fontMetrics()
+        QLabel.setText(self, fm.elidedText(self._full, Qt.TextElideMode.ElideMiddle, max(20, self.width() - 4)))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._apply()
+
+    def minimumSizeHint(self):
+        from PySide6.QtCore import QSize
+        return QSize(10, super().minimumSizeHint().height())
+
+
 def button(text: str, kind: str = "", tip: str = "") -> QPushButton:
     b = QPushButton(text)
     if kind:
