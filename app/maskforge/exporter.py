@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QImage, QImageWriter, QPainter
+from PySide6.QtGui import QColor, QImage, QImageWriter, QPainter
 from PySide6.QtWidgets import QGraphicsScene
 
 from .canvas import ImageItem, LayerItem, RenderContext
@@ -48,8 +48,10 @@ def unique_path(folder: Path, name: str, overwrite: bool, taken: set) -> Path:
     return p
 
 
-def render_doc(doc: ImageDoc, image: QImage, library, ex: dict) -> QImage:
-    k, W, H = compute_size(image.width(), image.height(), ex)
+def _render(doc, image: QImage, library, W: int, H: int, source: QRectF, target: QRectF,
+            fmt: str, fill: str | None = None) -> QImage:
+    """把原图 source 区域（含码）画到 W×H 画布的 target 区域。"""
+    k = target.width() / max(1.0, source.width())
     ctx = RenderContext(library)
     ctx.exporting = True
     ctx.set_image(doc, image)
@@ -62,16 +64,65 @@ def render_doc(doc: ImageDoc, image: QImage, library, ex: dict) -> QImage:
         it = LayerItem(L, ctx)
         it.setZValue(i + 1)
         scene.addItem(it)
-    fmt = ex.get("format", "jpg")
     out = QImage(W, H, QImage.Format.Format_ARGB32 if fmt == "png" else QImage.Format.Format_RGB32)
-    out.fill(Qt.GlobalColor.transparent if fmt == "png" else Qt.GlobalColor.white)
+    if fill:
+        out.fill(QColor(fill))
+    else:
+        out.fill(Qt.GlobalColor.transparent if fmt == "png" else Qt.GlobalColor.white)
     p = QPainter(out)
     p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
-    scene.render(p, QRectF(0, 0, W, H), QRectF(0, 0, image.width(), image.height()),
-                 Qt.AspectRatioMode.IgnoreAspectRatio)
+    scene.render(p, target, source, Qt.AspectRatioMode.IgnoreAspectRatio)
     p.end()
     scene.clear()
     return out
+
+
+def render_doc(doc: ImageDoc, image: QImage, library, ex: dict) -> QImage:
+    k, W, H = compute_size(image.width(), image.height(), ex)
+    return _render(doc, image, library, W, H, QRectF(0, 0, image.width(), image.height()),
+                   QRectF(0, 0, W, H), ex.get("format", "jpg"))
+
+
+# ---------------------------------------------------------------- 主图（正方形）
+def crop_rect(doc: ImageDoc, w: int, h: int, mode: str = "smart") -> QRectF:
+    """主图在原图上的正方形裁切范围。"""
+    c = doc.crop or {}
+    scale = max(0.2, min(1.0, float(c.get("scale", 1.0))))
+    side = min(w, h) * scale
+    if "cx" in c:
+        cx, cy = c["cx"] * w, c["cy"] * h
+    elif mode == "smart" and doc.subject:
+        x1, y1, x2, y2 = doc.subject
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        if doc.face and (y2 - y1) > side * 0.9:
+            # 人比框高：让脸靠近上边，身体往下排
+            cy = doc.face[1] - side * 0.08 + side / 2
+    else:
+        cx, cy = w / 2, h / 2
+    x = min(max(cx - side / 2, 0), w - side)
+    y = min(max(cy - side / 2, 0), h - side)
+    return QRectF(x, y, side, side)
+
+
+def render_main(doc: ImageDoc, image: QImage, library, ex: dict) -> QImage:
+    m = ex.get("main", {})
+    size = int(m.get("size", 800))
+    fmt = ex.get("format", "jpg")
+    w, h = image.width(), image.height()
+    if m.get("mode") == "pad":
+        k = size / max(w, h)
+        tw, th = w * k, h * k
+        target = QRectF((size - tw) / 2, (size - th) / 2, tw, th)
+        return _render(doc, image, library, size, size, QRectF(0, 0, w, h), target, fmt,
+                       m.get("pad_color", "#ffffff"))
+    src = crop_rect(doc, w, h, m.get("mode", "smart"))
+    return _render(doc, image, library, size, size, src, QRectF(0, 0, size, size), fmt)
+
+
+def main_name(doc: ImageDoc, ex: dict) -> str:
+    m = ex.get("main", {})
+    ext = FORMATS.get(ex.get("format", "jpg"), FORMATS["jpg"])[0]
+    return f"{ex.get('prefix', '')}{doc.path.stem}{m.get('suffix', '_主图')}.{ext}"
 
 
 def render_preview(doc: ImageDoc, thumb: QImage | None, library) -> QImage | None:

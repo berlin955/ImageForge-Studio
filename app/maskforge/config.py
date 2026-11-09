@@ -55,7 +55,7 @@ def icon_path() -> Path:
     return resource_dir() / "assets" / "icon.png"
 
 
-CONFIG_VERSION = 3
+CONFIG_VERSION = 4
 
 DEFAULTS: dict = {
     "config_version": CONFIG_VERSION,
@@ -81,7 +81,16 @@ DEFAULTS: dict = {
     },
     "export": {
         "dir": "",
-        "scope": "all",          # all | confirmed
+        "scope": "all",          # all | skip_attention
+        "normal": True,          # 导出普通图（按下面的尺寸）
+        "main": {                # 主图（正方形）
+            "enabled": False,
+            "size": 800,
+            "mode": "smart",     # smart 智能裁切 | center 居中裁切 | pad 留白不裁切
+            "pad_color": "#ffffff",
+            "suffix": "_主图",
+            "folder": "主图",
+        },
         "mode": "long",          # none | long | width | height | percent
         "value": 1600,
         "no_upscale": True,
@@ -122,6 +131,8 @@ class Config:
                         part = self.data["parts"].get(key, {})
                         if abs(float(part.get("scale", old_default)) - old_default) < 1e-6:
                             part["scale"] = DEFAULTS["parts"][key]["scale"]
+                if self.data["export"].get("scope") not in ("all", "skip_attention"):
+                    self.data["export"]["scope"] = "all"
                 self.data["config_version"] = CONFIG_VERSION
         except Exception:
             pass

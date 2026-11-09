@@ -101,7 +101,10 @@ class ImageDoc:
         self.layers: list[Layer] = []
         self.thumb: QImage | None = None     # 长边约 360px 的缩略图
         self.detected = False
-        self.confirmed = False
+        self.reviewed = False                # 手动看过 / 改过就算检查过
+        self.subject: tuple | None = None    # AI 识别到的人物范围（原图坐标）
+        self.face: tuple | None = None       # 脸的位置，用于主图裁切
+        self.crop: dict | None = None        # 手动调整过的主图框 {cx, cy, scale}，按比例记录
         self.error = ""
         self.hist: list[list[dict]] = []
         self.fut: list[list[dict]] = []
@@ -119,25 +122,36 @@ class ImageDoc:
         return img
 
     # ---- 状态 ----
+    LOW_SCORE = 0.4
+
+    def attention(self) -> str:
+        """需要人看一眼的原因；空字符串表示不需要。"""
+        if self.error or self.reviewed or not self.detected:
+            return ""
+        if not self.layers:
+            return "没有检出部位"
+        if any(l.auto and l.score < self.LOW_SCORE for l in self.layers):
+            return "可信度较低"
+        return ""
+
     def status(self) -> str:
         if self.error:
             return "error"
-        if self.confirmed:
-            return "ok"
-        if self.layers:
+        if self.attention():
+            return "attention"
+        if self.layers or self.detected or self.reviewed:
             return "done"
-        if self.detected:
-            return "none"
         return "todo"
 
     def status_text(self) -> str:
-        return {
-            "error": "读取失败",
-            "ok": "已确认",
-            "done": f"待审核 · {len(self.layers)} 个码",
-            "none": "未检出 · 请检查",
-            "todo": "未处理",
-        }[self.status()]
+        st = self.status()
+        if st == "error":
+            return "读取失败"
+        if st == "attention":
+            return "需要注意 · " + self.attention()
+        if st == "done":
+            return f"已打码 · {len(self.layers)} 个码" if self.layers else "无需打码"
+        return "未处理"
 
     # ---- 撤销 ----
     def snapshot(self) -> list[dict]:
