@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetricsF, QIcon, QImage, QPainter,
+from PySide6.QtGui import (QColor, QCursor, QFont, QFontDatabase, QFontMetricsF, QIcon, QImage, QPainter,
                            QPainterPath, QPen, QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog,
                                QFontComboBox, QFrame, QGraphicsItem, QGraphicsObject,
@@ -568,7 +568,7 @@ class SpecPage(QWidget):
         sb.setContentsMargins(0, 4, 0, 0)
         sb.setSpacing(8)
         self.font_combo = QFontComboBox()
-        self.font_combo.setWritingSystem(QFont.WritingSystem.SimplifiedChinese)
+        self.font_combo.setWritingSystem(QFontDatabase.WritingSystem.SimplifiedChinese)
         self.font_combo.currentFontChanged.connect(lambda f: self._set_text("family", f.family()))
         sb.addWidget(self.font_combo)
         self.size_spin = QSpinBox()
