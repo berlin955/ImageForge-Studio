@@ -67,9 +67,9 @@ def facing_score(kp: np.ndarray | None, labels=(), width: float = 1.0) -> float:
         def pair(a, b, wgt):
             nonlocal s
             if c[a] > 0.4 and c[b] > 0.4:
-                ref = max(1.0, np.hypot(*(kp[a, :2] - kp[b, :2])))
                 dx = kp[a, 0] - kp[b, 0]                # 人的左边减右边：正面时为正
-                strength = min(1.0, abs(dx) / ref * 1.5) if ref > width * 0.03 else 0.0
+                # 左右分得越开越可信；侧身时两点几乎重合，说明不了什么
+                strength = min(1.0, abs(dx) / max(1.0, width * 0.22))
                 s += wgt * strength * (1 if dx > 0 else -1)
 
         pair(L_SH, R_SH, 1.2)

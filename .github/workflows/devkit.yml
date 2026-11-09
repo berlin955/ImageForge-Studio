@@ -3,6 +3,10 @@ name: devkit
 # 开发用：把测试识别效果需要的模型、轮子打包到 devkit 预发布里（不是软件版本）
 on:
   workflow_dispatch:
+    inputs:
+      wheels_only:
+        description: 只打包轮子
+        default: "false"
 
 permissions:
   contents: write
@@ -23,7 +27,10 @@ jobs:
           pip download --only-binary=:all: --python-version 3.13 --platform manylinux2014_x86_64 --platform manylinux_2_17_x86_64 \
             -d wheels pyclipper shapely tqdm || true
           pip download --no-deps -d wheels rapidocr_onnxruntime==1.4.4 || true
+          pip download --only-binary=:all: --python-version 3.13 --platform manylinux2014_x86_64 --platform manylinux_2_17_x86_64 \
+            -d wheels onnx onnxconverter-common protobuf ml_dtypes || true
           gh release download v3.4-weights -R notAI-tech/NudeNet -p 640m.onnx -D kit || true
+          if [ "${{ inputs.wheels_only }}" = "true" ]; then ls -la wheels; cd wheels && zip -r ../devkit.zip . && cd ..; exit 0; fi
           pip install rapid-layout onnxruntime || true
           python - <<'PY' || true
           import shutil, glob, os, traceback
@@ -58,6 +65,8 @@ jobs:
           ls -la devkit.zip
       - name: 上传
         run: |
+          NAME=devkit.zip
+          if [ "${{ inputs.wheels_only }}" = "true" ]; then mv devkit.zip wheels.zip; NAME=wheels.zip; fi
           gh release view devkit -R ${{ github.repository }} >/dev/null 2>&1 || \
             gh release create devkit -R ${{ github.repository }} --prerelease --title "开发测试用（不是软件版本）" --notes "开发测试用的模型和依赖。"
-          gh release upload devkit devkit.zip -R ${{ github.repository }} --clobber
+          gh release upload devkit $NAME -R ${{ github.repository }} --clobber
