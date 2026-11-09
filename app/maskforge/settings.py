@@ -156,7 +156,7 @@ class SettingsDialog(QDialog):
                                                    t.setEnabled(s.currentData() == "sticker")))
             stk.currentIndexChanged.connect(lambda _i, k=key, t=stk: self._part(k, "sticker", t.currentData()))
             scale = QDoubleSpinBox()
-            scale.setRange(0.3, 3.0)
+            scale.setRange(0.1, 3.0)
             scale.setSingleStep(0.05)
             scale.setDecimals(2)
             scale.setSuffix(" 倍")

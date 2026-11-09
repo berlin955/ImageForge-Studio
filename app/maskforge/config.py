@@ -55,7 +55,7 @@ def icon_path() -> Path:
     return resource_dir() / "assets" / "icon.png"
 
 
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 
 DEFAULTS: dict = {
     "config_version": CONFIG_VERSION,
@@ -69,11 +69,11 @@ DEFAULTS: dict = {
     },
     "parts": {
         "lower": {"enabled": True, "covered": True, "style": "mosaic", "sticker": "builtin:heart",
-                  "color": "#16171b", "block": 0.018, "scale": 1.15, "opacity": 1.0},
+                  "color": "#16171b", "block": 0.018, "scale": 0.58, "opacity": 1.0},
         "crack": {"enabled": True, "covered": True, "style": "mosaic", "sticker": "builtin:bar",
-                  "color": "#16171b", "block": 0.016, "scale": 1.0, "opacity": 1.0},
+                  "color": "#16171b", "block": 0.016, "scale": 0.5, "opacity": 1.0},
         "areola": {"enabled": True, "covered": False, "style": "sticker", "sticker": "builtin:heart",
-                   "color": "#16171b", "block": 0.012, "scale": 1.0, "opacity": 1.0},
+                   "color": "#16171b", "block": 0.012, "scale": 0.5, "opacity": 1.0},
         "custom": {"enabled": True, "style": "blur", "sticker": "builtin:star",
                    "color": "#16171b", "block": 0.02, "scale": 1.0, "opacity": 1.0},
     },
@@ -114,6 +114,12 @@ class Config:
                     # v1.0.0 的默认灵敏度偏低，升级时改成新的默认值
                     if abs(float(self.data["detect"].get("threshold", 0.25)) - 0.35) < 1e-6:
                         self.data["detect"]["threshold"] = 0.25
+                if old < 3:
+                    # v1.0.4：自动码默认缩小一半；用户改过的大小保持不变
+                    for key, old_default in (("lower", 1.15), ("crack", 1.0), ("areola", 1.0)):
+                        part = self.data["parts"].get(key, {})
+                        if abs(float(part.get("scale", old_default)) - old_default) < 1e-6:
+                            part["scale"] = DEFAULTS["parts"][key]["scale"]
                 self.data["config_version"] = CONFIG_VERSION
         except Exception:
             pass
