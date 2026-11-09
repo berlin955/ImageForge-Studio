@@ -19,5 +19,5 @@ jobs:
       - run: pip install PySide6==6.7.3
       - name: 生成图标预览
         run: |
-          python tools/render_icons.py nav_icons_preview.png
+          python tools/render_scan.py nav_icons_preview.png
           python -c "import base64;d=base64.b64encode(open('nav_icons_preview.png','rb').read()).decode();print('PREVIEW-BEGIN');[print('P:'+d[i:i+3000]) for i in range(0,len(d),3000)];print('PREVIEW-END')"
