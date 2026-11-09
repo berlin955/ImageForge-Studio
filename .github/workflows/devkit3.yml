@@ -1,0 +1,42 @@
+name: devkit3
+
+# 开发用：下载字体和 AI 去字模型，打包到 devkit 预发布里做测试（不是软件版本）
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: 下载
+        run: |
+          mkdir -p kit/fonts kit/lama
+          try() { echo "== $1"; curl -fL --retry 2 -o "$2" "$1" && ls -la "$2" || { echo "FAIL $1"; rm -f "$2"; }; }
+          # 思源黑体 / 思源宋体（简体中文子集，免费可商用）
+          gh release download -R adobe-fonts/source-han-sans -p "SourceHanSansSC.zip" -D kit || \
+            gh release download 2.004R -R adobe-fonts/source-han-sans -p "*SC*.zip" -D kit || true
+          gh release download -R adobe-fonts/source-han-serif -p "*SC*.zip" -D kit || true
+          ls -la kit
+          for z in kit/*.zip; do unzip -oq "$z" -d kit/fonts/$(basename "$z" .zip) || true; done
+          find kit/fonts -name "*.otf" | head -40
+          # 拉丁字体（OFL 免费可商用）
+          G=https://github.com/google/fonts/raw/main/ofl
+          try $G/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf kit/fonts/PlayfairDisplay.ttf
+          try $G/cinzel/Cinzel%5Bwght%5D.ttf kit/fonts/Cinzel.ttf
+          try $G/montserrat/Montserrat%5Bwght%5D.ttf kit/fonts/Montserrat.ttf
+          try $G/oswald/Oswald%5Bwght%5D.ttf kit/fonts/Oswald.ttf
+          try $G/cormorantgaramond/CormorantGaramond%5Bwght%5D.ttf kit/fonts/CormorantGaramond.ttf
+          # LaMa 去字 / 修补模型
+          try https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx kit/lama/lama_fp32.onnx
+          try https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama.onnx kit/lama/lama.onnx
+          rm -f kit/*.zip
+          du -sh kit/fonts kit/lama
+      - name: 上传
+        run: |
+          cd kit && zip -qr ../kit3.zip . && cd .. && ls -la kit3.zip
+          gh release upload devkit kit3.zip -R ${{ github.repository }} --clobber
