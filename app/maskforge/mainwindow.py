@@ -251,13 +251,13 @@ class MainWindow(QMainWindow):
 
     # ---- 外壳：左侧功能栏 + 各功能页 ----
     NAV = [
+        ("assets", "▦", "素材"),        # 起点：导入一次，后面所有功能共用
         ("mask", "◐", "智能打码"),
         ("main", "▣", "批量主图"),
         ("spec", "▤", "智能规格"),
         ("detail", "☰", "智能详情"),
         ("watermark", "◎", "批量水印"),
-        None,                       # 分隔线：下面是资料
-        ("assets", "▦", "素材"),
+        None,                           # 分隔线：下面是资料
         ("templates", "❖", "模板库"),
     ]
 
@@ -337,7 +337,7 @@ class MainWindow(QMainWindow):
         h.addWidget(nav)
         h.addWidget(self.pages, 1)
         self.setCentralWidget(central)
-        self.show_page("mask")
+        self.show_page("assets")
 
     def _nav_button(self, text: str, icon: str):
         from PySide6.QtWidgets import QToolButton
