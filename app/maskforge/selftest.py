@@ -13,6 +13,12 @@ def run_selftest(log_path: str | None = None) -> int:
     def log(s):
         lines.append(str(s))
         print(s, flush=True)
+        if log_path:   # 边跑边写，万一中途闪退也能看到停在哪一步
+            try:
+                with open(log_path, "a", encoding="utf-8") as fh:
+                    fh.write(str(s) + "\n")
+            except Exception:
+                pass
 
     code = 0
     try:
@@ -456,9 +462,4 @@ def run_selftest(log_path: str | None = None) -> int:
         code = 1
         log("SELFTEST FAILED")
         log(traceback.format_exc())
-    if log_path:
-        try:
-            Path(log_path).write_text("\n".join(lines), "utf-8")
-        except Exception:
-            pass
     return code

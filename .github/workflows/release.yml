@@ -114,6 +114,8 @@ jobs:
           $log = Join-Path $PWD "selftest-exe.log"
           $p = Start-Process -FilePath "dist\MaskForge\MaskForge.exe" -ArgumentList "--selftest","--selftest-log",$log -Wait -PassThru
           if (Test-Path $log) { Get-Content $log -Encoding utf8 } else { Write-Host "no log" }
+          $crash = Join-Path $env:APPDATA "ImageForge Studio\crash.log"
+          if (Test-Path $crash) { Write-Host "---- crash.log ----"; Get-Content $crash -Encoding utf8 -Tail 60 }
           if ($p.ExitCode -ne 0) { Write-Error "exe selftest failed: $($p.ExitCode)"; exit 1 }
 
       - name: 制作安装程序
