@@ -85,6 +85,28 @@ def render_slot(slot: dict, doc, ov: dict, library, scale: float, preview: bool,
 
 # ================================================================ 画布上的图片位
 HANDLE = 10.0
+SHAPES = [("rect", "直角"), ("round", "圆角"), ("capsule", "胶囊"), ("ellipse", "椭圆")]
+
+
+def slot_shape_key(slot: dict) -> str:
+    if slot.get("shape") == "ellipse":
+        return "ellipse"
+    r = float(slot.get("radius") or 0)
+    return "rect" if r < 0.02 else "capsule" if r >= 0.45 else "round"
+
+
+def slot_path(slot: dict, r: QRectF) -> QPainterPath:
+    """图片位的形状（照片框可能是圆角、胶囊或椭圆）。"""
+    path = QPainterPath()
+    if slot.get("shape") == "ellipse":
+        path.addEllipse(r)
+        return path
+    rad = float(slot.get("radius") or 0) * min(r.width(), r.height())
+    if rad > 0.5:
+        path.addRoundedRect(r, rad, rad)
+    else:
+        path.addRect(r)
+    return path
 
 
 class SlotItem(QGraphicsObject):
@@ -113,8 +135,10 @@ class SlotItem(QGraphicsObject):
         return self.rect().adjusted(-m, -m, m, m)
 
     def shape(self):
+        if not self.page.edit_mode:
+            return slot_path(self.slot, self.rect())
         path = QPainterPath()
-        path.addRect(self.boundingRect() if self.page.edit_mode else self.rect())
+        path.addRect(self.boundingRect())
         return path
 
     def fill(self):
@@ -125,6 +149,10 @@ class SlotItem(QGraphicsObject):
         r = self.rect()
         f = self.fill()
         doc = self.page.mw.doc_by_id(f["doc"]) if f else None
+        path = slot_path(self.slot, r)
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setClipPath(path)
         if doc is not None:
             masked = self.page.use_mask()
             key = (doc.id, tuple(sorted(f["ov"].items())), round(r.width()), round(r.height()),
@@ -138,18 +166,22 @@ class SlotItem(QGraphicsObject):
                 p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
                 p.drawImage(r, self._cache)
         elif not self.page.exporting:
-            p.fillRect(r, QColor(pal["card2"]))
-            pen = QPen(QColor(pal["muted"]), 1.5, Qt.PenStyle.DashLine)
-            pen.setCosmetic(True)
-            p.setPen(pen)
-            p.drawRect(r)
+            # 原来的照片已经抠掉：显示成空位
+            p.fillPath(path, QColor(pal["card2"]))
             f2 = QFont(DEFAULT_FONT)
             f2.setPixelSize(max(10, int(min(r.width(), r.height()) * 0.06)))
             p.setFont(f2)
             p.setPen(QColor(pal["fg"]))
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, f"{self.slot.get('role', '图片')}\n点一下，再点下面的图片填入")
+        p.restore()
         if self.page.exporting:
             return
+        if doc is None:
+            pen = QPen(QColor(pal["muted"]), 1.5, Qt.PenStyle.DashLine)
+            pen.setCosmetic(True)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(path)
         if self.isSelected() or self.page.edit_mode:
             pen = QPen(QColor(pal["accent"]), 2 if self.isSelected() else 1)
             pen.setCosmetic(True)
@@ -157,7 +189,11 @@ class SlotItem(QGraphicsObject):
                 pen.setStyle(Qt.PenStyle.DashLine)
             p.setPen(pen)
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawRect(r)
+            p.drawPath(path)
+            if self.page.edit_mode and slot_shape_key(self.slot) != "rect":
+                pen.setStyle(Qt.PenStyle.DotLine)
+                p.setPen(pen)
+                p.drawRect(r)
         if self.page.edit_mode and self.isSelected():
             hs = HANDLE / max(0.05, self.page.view_scale())
             p.setBrush(QColor("#ffffff"))
@@ -589,7 +625,7 @@ class TemplatePage(QWidget):
         self.slot_list.setIconSize(QSize(36, 36))
         self.slot_list.itemClicked.connect(self._slot_clicked)
         c2.add(self.slot_list)
-        b_auto = button("自动填图（正面 / 背面）", "Primary")
+        b_auto = button("自动填图（正面 / 背面）" if self.kind == "spec" else "自动填图", "Primary")
         b_auto.clicked.connect(self.auto_fill)
         b_clear = button("清空选中图片位", "Ghost")
         b_clear.clicked.connect(self.clear_selected_slot)
@@ -598,6 +634,15 @@ class TemplatePage(QWidget):
         self.b_del_slot = button("删除选中图片位", "Ghost")
         self.b_del_slot.clicked.connect(self.delete_selected_slot)
         c2.add(self.b_del_slot)
+        self.shape_box = QWidget()
+        shl = QVBoxLayout(self.shape_box)
+        shl.setContentsMargins(0, 0, 0, 0)
+        shl.setSpacing(4)
+        shl.addWidget(muted("选中图片位的形状"))
+        self.shape_seg = Segmented(SHAPES)
+        self.shape_seg.changed.connect(self._set_shape)
+        shl.addWidget(self.shape_seg)
+        c2.add(self.shape_box)
         c2.add(muted("先点一个图片位，再点下面的素材填进去。填好后在图上拖动调位置，滚轮缩放，双击恢复。"))
 
         c3 = Card("文字")
@@ -821,13 +866,28 @@ class TemplatePage(QWidget):
         n = len(self.tpl["slots"])
         roles = ["正面", "背面"]
         s = {"id": uuid.uuid4().hex[:8], "x": r.x(), "y": r.y(), "w": r.width(), "h": r.height(),
-             "role": roles[n] if n < 2 else f"图片{n + 1}", "radius": 0.0}
+             "role": (roles[n] if n < 2 else f"图片{n + 1}") if self.kind == "spec" else f"图片{n + 1}",
+             "shape": "rect", "radius": 0.0}
         self.tpl["slots"].append(s)
         it = SlotItem(self, s)
         self.view.scene().addItem(it)
         self.slot_items[s["id"]] = it
         self.view.scene().clearSelection()
         it.setSelected(True)
+        self.dirty = True
+        self._update_side()
+
+    def _set_shape(self, key: str):
+        it = self.selected()
+        if self._loading or not isinstance(it, SlotItem):
+            return
+        s = it.slot
+        if key == "ellipse":
+            s["shape"], s["radius"] = "ellipse", 0.5
+        else:
+            s["shape"] = "rect"
+            s["radius"] = {"rect": 0.0, "round": 0.12, "capsule": 0.5}[key]
+        it.update()
         self.dirty = True
         self._update_side()
 
@@ -1022,6 +1082,12 @@ class TemplatePage(QWidget):
                     it.setSelected(True)
         self.slot_list.setFixedHeight(min(200, 44 * max(1, self.slot_list.count()) + 6))
         self.b_del_slot.setVisible(self.edit_mode)
+        is_slot = isinstance(sel, SlotItem)
+        self.shape_box.setVisible(self.edit_mode and is_slot)
+        if is_slot:
+            self._loading = True
+            self.shape_seg.set_value(slot_shape_key(sel.slot))
+            self._loading = False
         is_text = isinstance(sel, TextItem)
         self.style_box.setVisible(is_text)
         self.b_del_text.setEnabled(is_text)
@@ -1087,7 +1153,11 @@ class TemplatePage(QWidget):
             img = render_slot(s, doc, f["ov"], self.mw.library, 1.0, preview=False,
                               masked=self.use_mask()) if doc else None
             if img is not None:
-                p.drawImage(QRectF(s["x"], s["y"], s["w"], s["h"]), img)
+                rr = QRectF(s["x"], s["y"], s["w"], s["h"])
+                p.save()
+                p.setClipPath(slot_path(s, rr))
+                p.drawImage(rr, img)
+                p.restore()
         for t in tpl["texts"]:
             draw_text(p, t)
         p.end()

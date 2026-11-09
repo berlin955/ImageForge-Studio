@@ -1,6 +1,6 @@
 """智能规格：把一张别人的规格图变成模板。
 
-1. 找照片框：用人物识别找到模特，再沿着照片边缘往外扩，得到整个照片框（图片位）。
+1. 找照片：模特连同照片背景整块找出来（直角、圆角、胶囊、椭圆形的照片框都行），做成图片位。
 2. 找文字：OCR 识别图上的文字（照片框里面的字不算），记下位置、大小、颜色。
 3. 擦字：把识别到的文字从背景上擦掉、补好，文字改成可编辑的图层。
 """
@@ -117,9 +117,56 @@ def expand_to_frame(gray: np.ndarray, seed: tuple, thr: float = 16.0) -> tuple:
     return float(x1), float(y1), float(x2 + 1), float(y2 + 1)
 
 
-def find_slots(rgb: np.ndarray, dets: list[dict], blocks: bool = False) -> list[dict]:
-    """返回图片位列表 [{"x","y","w","h"}]（原图坐标），按从左到右、从上到下排序。"""
+def _overlap(a, b) -> float:
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    return ix * iy
+
+
+def _area(r) -> float:
+    return max(0.0, r[2] - r[0]) * max(0.0, r[3] - r[1])
+
+
+def find_slots(rgb: np.ndarray, dets: list[dict], blocks: bool = False, text_boxes=()) -> list[dict]:
+    """找出图上所有照片（模特连同照片背景整块），返回图片位列表
+    [{"x","y","w","h","shape","radius"}]（原图坐标）。
+
+    1. 封闭的照片框（直角、圆角、胶囊、椭圆都行）：看边缘围起来的区域，颜色丰富的是照片；
+    2. 识别到模特、但不在上面这些框里的：从模特往外找照片的直边；
+    3. 详情长图：再补上没有模特的照片块（面料特写等）。
+    text_boxes：识别到的文字框 (x1, y1, x2, y2)，主要是文字的区域不当作照片。"""
+    from .photo_regions import find_regions
     H, W = rgb.shape[:2]
+    people = _cluster_people(dets, W, H)
+    slots: list[dict] = []
+
+    def rect_of(s):
+        return (s["x"], s["y"], s["x"] + s["w"], s["y"] + s["h"])
+
+    def has_person(r):
+        return any(r[0] <= (p[0] + p[2]) / 2 <= r[2] and r[1] <= (p[1] + p[3]) / 2 <= r[3] for p in people)
+
+    try:
+        regions = find_regions(rgb)
+    except Exception:
+        regions = []
+    for reg in sorted(regions, key=lambda g: g["w"] * g["h"], reverse=True):
+        r = rect_of(reg)
+        person = has_person(r)
+        if not person:
+            if not reg["photo"]:
+                continue
+            if max(reg["w"] / max(1, reg["h"]), reg["h"] / max(1, reg["w"])) > 4:
+                continue      # 细长条多半是装饰条、标题底框
+            txt = sum(_overlap(r, t) for t in text_boxes)
+            if txt > 0.08 * _area(r):
+                continue      # 主要是文字（标题框、尺码表）
+        if any(_overlap(r, rect_of(s)) > 0.5 * min(_area(r), _area(rect_of(s))) for s in slots):
+            continue
+        slots.append({"x": reg["x"], "y": reg["y"], "w": reg["w"], "h": reg["h"],
+                      "shape": reg["shape"], "radius": reg["radius"]})
+
+    # 模特不在上面的照片框里：从模特往外扩，找照片的直边
     k = min(1.0, 900 / W)   # 按宽度缩小；长图不能按长边缩，否则会缩得太小
     if k < 1:
         idx_y = (np.arange(int(H * k)) / k).astype(int)
@@ -128,41 +175,29 @@ def find_slots(rgb: np.ndarray, dets: list[dict], blocks: bool = False) -> list[
     else:
         small = rgb
     gray = small.astype(np.float32).mean(2)
-    seeds = _cluster_people(dets, W, H)
-    rects = []
-    for s in seeds:
-        sx = [v * k for v in s]
-        x1, y1, x2, y2 = expand_to_frame(gray, sx)
-        rects.append([x1 / k, y1 / k, x2 / k, y2 / k])
-    # 重叠很多的合并成一个
-    merged: list[list] = []
-    for r in sorted(rects, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]), reverse=True):
-        dup = False
-        for m in merged:
-            ix = max(0, min(r[2], m[2]) - max(r[0], m[0]))
-            iy = max(0, min(r[3], m[3]) - max(r[1], m[1]))
-            if ix * iy > 0.6 * (r[2] - r[0]) * (r[3] - r[1]):
-                dup = True
-                break
-        if not dup:
-            merged.append(r)
+    for p in sorted(people, key=_area, reverse=True):
+        cx, cy = (p[0] + p[2]) / 2, (p[1] + p[3]) / 2
+        if any(s["x"] <= cx <= s["x"] + s["w"] and s["y"] <= cy <= s["y"] + s["h"] for s in slots):
+            continue
+        x1, y1, x2, y2 = expand_to_frame(gray, [v * k for v in p])
+        r = (x1 / k, y1 / k, x2 / k, y2 / k)
+        # 扩出去的范围压到了别的照片，说明没找准边：退回到模特周围一圈
+        if any(_overlap(r, rect_of(s)) > 0.15 * _area(rect_of(s)) for s in slots):
+            mx, my = (p[2] - p[0]) * 0.08, (p[3] - p[1]) * 0.05
+            r = (max(0, p[0] - mx), max(0, p[1] - my), min(W, p[2] + mx), min(H, p[3] + my))
+        slots.append({"x": r[0], "y": r[1], "w": r[2] - r[0], "h": r[3] - r[1], "shape": "rect", "radius": 0.0})
+
     if blocks:
         for b in photo_blocks(gray):
             b = [v / k for v in b]
-            hit = False
-            for m in merged:
-                ix = max(0, min(b[2], m[2]) - max(b[0], m[0]))
-                iy = max(0, min(b[3], m[3]) - max(b[1], m[1]))
-                if ix * iy > 0.3 * min((b[2] - b[0]) * (b[3] - b[1]), (m[2] - m[0]) * (m[3] - m[1])):
-                    hit = True
-                    break
-            if not hit:
-                merged.append(b)
+            if any(_overlap(b, rect_of(s)) > 0.3 * min(_area(b), _area(rect_of(s))) for s in slots):
+                continue
+            slots.append({"x": b[0], "y": b[1], "w": b[2] - b[0], "h": b[3] - b[1], "shape": "rect", "radius": 0.0})
     if H > 1.6 * W:   # 长图：从上到下
-        merged.sort(key=lambda r: (r[1], r[0]))
+        slots.sort(key=lambda s: (s["y"], s["x"]))
     else:
-        merged.sort(key=lambda r: (round(r[0] / max(1, W) * 4), r[1]))
-    return [{"x": r[0], "y": r[1], "w": r[2] - r[0], "h": r[3] - r[1]} for r in merged]
+        slots.sort(key=lambda s: (round(s["x"] / max(1, W) * 4), s["y"]))
+    return slots
 
 
 def photo_blocks(gray: np.ndarray, min_h_ratio: float = 0.22) -> list[list]:
@@ -280,19 +315,24 @@ def _inside(cx: float, cy: float, slots: list[dict]) -> bool:
     return any(s["x"] <= cx <= s["x"] + s["w"] and s["y"] <= cy <= s["y"] + s["h"] for s in slots)
 
 
-def find_texts(rgb: np.ndarray, slots: list[dict], min_score: float = 0.5):
+def run_ocr(rgb: np.ndarray) -> list:
+    global last_error
+    try:
+        res = ocr_tiled(rgb)
+        last_error = ""
+        return res or []
+    except Exception as e:
+        import traceback
+        last_error = f"{e}\n{traceback.format_exc()}"
+        return []
+
+
+def find_texts(rgb: np.ndarray, slots: list[dict], min_score: float = 0.5, ocr=None):
     """返回 (文字图层列表, 需要擦掉的像素蒙版)。照片框里面的字不算。"""
     H, W = rgb.shape[:2]
     mask = np.zeros((H, W), np.uint8)
     texts = []
-    global last_error
-    try:
-        result = ocr_tiled(rgb)
-        last_error = ""
-    except Exception as e:
-        import traceback
-        last_error = f"{e}\n{traceback.format_exc()}"
-        result = None
+    result = run_ocr(rgb) if ocr is None else ocr
     for item in result or []:
         box, text, score = item[0], item[1], float(item[2])
         text = (text or "").strip()
@@ -363,8 +403,13 @@ def build_template(path: str, detector, name: str = "", kind: str = "spec") -> d
     rgb = qimage_to_rgb(img)
     H, W = rgb.shape[:2]
     dets = detect_tiled(detector, img, 0.2)
-    slots = find_slots(rgb, dets, blocks=(kind == "detail"))
-    texts, mask = find_texts(rgb, slots)
+    ocr = run_ocr(rgb)
+    boxes = []
+    for item in ocr:
+        pts = np.array(item[0], dtype=np.float32)
+        boxes.append((*pts.min(0), *pts.max(0)))
+    slots = find_slots(rgb, dets, blocks=(kind == "detail"), text_boxes=boxes)
+    texts, mask = find_texts(rgb, slots, ocr=ocr)
     clean = erase(rgb, mask)
     tid = uuid.uuid4().hex[:10]
     folder = templates_dir() / tid
@@ -376,7 +421,8 @@ def build_template(path: str, detector, name: str = "", kind: str = "spec") -> d
     for i, s in enumerate(slots):
         s["id"] = uuid.uuid4().hex[:8]
         s["role"] = roles[i] if i < len(roles) else f"图片{i + 1}"
-        s["radius"] = 0.0
+        s.setdefault("shape", "rect")
+        s.setdefault("radius", 0.0)
     tpl = {"id": tid, "kind": kind, "name": name or Path(path).stem, "w": W, "h": H,
            "slots": slots, "texts": texts}
     save_template(tpl)

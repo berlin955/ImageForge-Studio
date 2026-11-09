@@ -324,12 +324,20 @@ def run_selftest(log_path: str | None = None) -> int:
         import cv2
         import numpy as _np
         arr = _np.full((1000, 1000, 3), 233, _np.uint8)
-        arr[:, :480] = (80, 96, 128)
-        arr[280:840, 540:920] = 255
-        arr[300:820, 560:900] = (96, 112, 160)
+        _rng = _np.random.default_rng(3)
+        # 左边：贴着上下边的直角照片；右边：胶囊形相框里的照片（带描边）
+        arr[:, :480] = _rng.integers(30, 220, (1000, 480, 3), dtype=_np.uint8)
+        cap = _np.zeros((1000, 1000), _np.uint8)
+        cv2.rectangle(cap, (560, 470), (900, 650), 1, -1)
+        cv2.circle(cap, (730, 470), 170, 1, -1)
+        cv2.circle(cap, (730, 650), 170, 1, -1)
+        tex = _rng.integers(30, 220, (1000, 1000, 3), dtype=_np.uint8)
+        arr[cap > 0] = tex[cap > 0]
+        ring = cv2.dilate(cap, _np.ones((9, 9), _np.uint8)) - cap
+        arr[ring > 0] = (150, 120, 90)
         arr[60:180, 560:960] = 17
         cv2.putText(arr, "6757 WHITE", (585, 145), cv2.FONT_HERSHEY_SIMPLEX, 1.9, (255, 255, 255), 5, cv2.LINE_AA)
-        cv2.putText(arr, "SIZE 80-125", (600, 930), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (50, 50, 50), 3, cv2.LINE_AA)
+        cv2.putText(arr, "SIZE 80-125", (600, 920), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (50, 50, 50), 3, cv2.LINE_AA)
         ok_, buf = cv2.imencode(".png", arr)
         buf.tofile(str(tpl_src))
         tpl = build_template(str(tpl_src), None, "测试规格")
@@ -351,10 +359,21 @@ def run_selftest(log_path: str | None = None) -> int:
         mw.show_page("spec")
         sp.reload_templates(select=tpl["id"])
         app.processEvents()
+        log(f"spec slots: {[(s['role'], int(s['x']), int(s['y']), int(s['w']), int(s['h']), s.get('shape'), s.get('radius')) for s in tpl['slots']]}")
+        assert len(sp.tpl["slots"]) == 2, sp.tpl["slots"]
+        s0, s1 = sp.tpl["slots"]
+        assert s0["x"] < 5 and abs(s0["w"] - 480) < 15 and s0["h"] > 980, s0
+        assert abs(s1["x"] - 560) < 15 and abs(s1["y"] - 300) < 15 and abs(s1["h"] - 520) < 20, s1
+        from .spec import slot_shape_key
+        assert slot_shape_key(s0) == "rect" and slot_shape_key(s1) in ("capsule", "ellipse"), (s0, s1)
         sp.set_edit_mode(True)
         from PySide6.QtCore import QRectF as _R
-        sp.add_slot(_R(0, 0, 480, 1000))
-        sp.add_slot(_R(560, 300, 340, 520))
+        sp.add_slot(_R(10, 10, 50, 50))
+        sp.view.scene().clearSelection()
+        sp.slot_items[sp.tpl["slots"][-1]["id"]].setSelected(True)
+        sp._set_shape("ellipse")
+        assert sp.tpl["slots"][-1]["shape"] == "ellipse"
+        sp.delete_selected_slot()
         sp.set_edit_mode(False)
         assert len(sp.tpl["slots"]) == 2
         for d in mw.docs:
