@@ -504,6 +504,7 @@ class MainWindow(QMainWindow):
         if img is None or img.isNull():
             return
         d.icon = QIcon(QPixmap.fromImage(img))
+        d.icon_plain = QIcon(QPixmap.fromImage(d.thumb))
         it = self.film.item(self.docs.index(d))
         if it:
             it.setIcon(d.icon)

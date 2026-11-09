@@ -17,7 +17,9 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
 from . import theme
 from .canvas import ImageItem
 from .exporter import FORMATS, _render, save_image, unique_path
-from .mainimage import _scaled_doc, crop_rect_aspect, proxy_of
+from types import SimpleNamespace
+
+from .mainimage import _scaled_doc, crop_rect_aspect, doc_icon, proxy_of
 from .pages import page_header
 from .spec_engine import (build_template, delete_template, load_templates, save_template,
                           template_bg)
@@ -54,7 +56,8 @@ def draw_text(p: QPainter, t: dict, origin: QPointF | None = None):
     p.drawText(QPointF(x, base), t.get("text", ""))
 
 
-def render_slot(slot: dict, doc, ov: dict, library, scale: float, preview: bool) -> QImage | None:
+def render_slot(slot: dict, doc, ov: dict, library, scale: float, preview: bool,
+                masked: bool = True) -> QImage | None:
     """把一张图按图片位的比例裁好（带码）。scale：输出像素 / 模板像素。"""
     if doc is None:
         return None
@@ -69,7 +72,8 @@ def render_slot(slot: dict, doc, ov: dict, library, scale: float, preview: bool)
             return None
     w, h = max(1, round(slot["w"] * scale)), max(1, round(slot["h"] * scale))
     src = crop_rect_aspect(doc, img.width(), img.height(), w / h, "smart", ov)
-    return _render(_scaled_doc(doc, k), img, library, w, h, src, QRectF(0, 0, w, h), "jpg")
+    fake = _scaled_doc(doc, k) if masked else SimpleNamespace(layers=[])
+    return _render(fake, img, library, w, h, src, QRectF(0, 0, w, h), "jpg")
 
 
 # ================================================================ 画布上的图片位
@@ -115,10 +119,13 @@ class SlotItem(QGraphicsObject):
         f = self.fill()
         doc = self.page.mw.doc_by_id(f["doc"]) if f else None
         if doc is not None:
-            key = (doc.id, tuple(sorted(f["ov"].items())), round(r.width()), round(r.height()), len(doc.layers))
+            masked = self.page.use_mask()
+            key = (doc.id, tuple(sorted(f["ov"].items())), round(r.width()), round(r.height()),
+                   len(doc.layers), masked)
             if key != self._cache_key or self._cache is None:
                 sc = min(1.0, 1100 / max(r.width(), r.height()))
-                self._cache = render_slot(self.slot, doc, f["ov"], self.page.mw.library, sc, preview=True)
+                self._cache = render_slot(self.slot, doc, f["ov"], self.page.mw.library, sc, preview=True,
+                                          masked=masked)
                 self._cache_key = key
             if self._cache is not None:
                 p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
@@ -522,7 +529,21 @@ class SpecPage(QWidget):
         self.reload_templates()
 
     # ---------------------------------------------------------------- 左侧
+    def use_mask(self) -> bool:
+        return bool(self.sc.get("use_mask", True))
+
+    def _mask_changed(self, k):
+        self._save_sc("use_mask", k == "1")
+        self._film_ids = []
+        self.refresh()
+        for it in getattr(self, "slot_items", {}).values():
+            it.update()
+
     def _build_side(self):
+        c0 = Card("用哪个版本的图")
+        self.mask_seg = Segmented([("1", "打码后的图"), ("0", "原图（不打码）")])
+        self.mask_seg.changed.connect(self._mask_changed)
+        c0.add(self.mask_seg)
         c1 = Card("模板")
         self.tpl_combo = QComboBox()
         self.tpl_combo.currentIndexChanged.connect(self._tpl_selected)
@@ -597,8 +618,9 @@ class SpecPage(QWidget):
         self.name_edit.setPlaceholderText("文件名，例如 6757白色_规格")
         c4.add(self.name_edit)
 
-        area, _ = scroll_page(c1, c2, c3, c4)
+        area, _ = scroll_page(c0, c1, c2, c3, c4)
         self.fmt.set_value(self.sc.get("format", "jpg"))
+        self.mask_seg.set_value("1" if self.sc.get("use_mask", True) else "0")
         return area
 
     def _save_sc(self, k, v):
@@ -949,7 +971,7 @@ class SpecPage(QWidget):
             for s in tpl["slots"]:
                 f = self.fills.get(s["id"])
                 d = self.mw.doc_by_id(f["doc"]) if f else None
-                it = QListWidgetItem(d.icon if d and d.icon else QIcon(),
+                it = QListWidgetItem(doc_icon(d, self.use_mask(), QIcon()) if d else QIcon(),
                                      f"{s.get('role', '图片')}　" + (d.name[:18] if d else "未填图"))
                 it.setData(Qt.ItemDataRole.UserRole, s["id"])
                 self.slot_list.addItem(it)
@@ -982,7 +1004,7 @@ class SpecPage(QWidget):
         if self._film_ids != ids:
             self.film.clear()
             for d in self.mw.docs:
-                it = QListWidgetItem(d.icon or self.mw._placeholder, "")
+                it = QListWidgetItem(doc_icon(d, self.use_mask(), self.mw._placeholder), "")
                 it.setData(Qt.ItemDataRole.UserRole, d.id)
                 it.setToolTip(d.name)
                 self.film.addItem(it)
@@ -996,7 +1018,7 @@ class SpecPage(QWidget):
         for i in range(self.film.count()):
             it = self.film.item(i)
             if it.data(Qt.ItemDataRole.UserRole) == d.id and d.icon is not None:
-                it.setIcon(d.icon)
+                it.setIcon(doc_icon(d, self.use_mask(), self.mw._placeholder))
         for sid, f in self.fills.items():
             if f["doc"] == d.id and sid in getattr(self, "slot_items", {}):
                 self.slot_items[sid].update()
@@ -1019,7 +1041,8 @@ class SpecPage(QWidget):
         for s in tpl["slots"]:
             f = self.fills.get(s["id"])
             doc = self.mw.doc_by_id(f["doc"]) if f else None
-            img = render_slot(s, doc, f["ov"], self.mw.library, 1.0, preview=False) if doc else None
+            img = render_slot(s, doc, f["ov"], self.mw.library, 1.0, preview=False,
+                              masked=self.use_mask()) if doc else None
             if img is not None:
                 p.drawImage(QRectF(s["x"], s["y"], s["w"], s["h"]), img)
         for t in tpl["texts"]:

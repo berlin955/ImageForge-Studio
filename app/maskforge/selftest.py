@@ -285,6 +285,17 @@ def run_selftest(log_path: str | None = None) -> int:
             assert lr is not None and lr.x() < size * 0.2 and lr.y() < size * 0.2, f"角标不在左上角：{lr}"
         img, cells, lr = compose(mc, [(d0, {})], (0.6, 0.7), lib, 800, preview=False)
         assert abs(lr.x() - 480) < 2 and abs(lr.y() - 560) < 2, f"单张手动挪角标无效：{lr}"
+        # 「原图（不打码）」模式：和打码版不一样，且与不带码的渲染一致
+        mc.update(size=800, mode="center", layout="single", use_mask=True)
+        lg_en = mc["logo"]["enabled"]
+        mc["logo"]["enabled"] = False
+        a1, _c, _l = compose(mc, [(d0, {})], None, lib, 800, preview=False)
+        mc["use_mask"] = False
+        a2, _c, _l = compose(mc, [(d0, {})], None, lib, 800, preview=False)
+        mc["use_mask"] = True
+        mc["logo"]["enabled"] = lg_en
+        assert a1 != a2, "主图「原图」模式没有去掉码"
+        log("main image plain mode ok")
         mc.update(layout="collage", mode="smart", cells=2, gap=10)
         mp.auto_group()
         assert mp.groups and len(mp.groups[0]["docs"]) == 2, mp.groups

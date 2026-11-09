@@ -99,11 +99,13 @@ DEFAULTS: dict = {
         "format": "jpg",
         "suffix": "_主图",
         "folder": "主图",
+        "use_mask": True,
         "logo": {"enabled": False, "file": "", "size": 0.2, "margin": 0.03, "opacity": 1.0, "corner": "tl"},
     },
     "spec": {
         "format": "jpg",
         "last_template": "",
+        "use_mask": True,
     },
     "export": {
         "dir": "",

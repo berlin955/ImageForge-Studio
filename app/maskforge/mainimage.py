@@ -64,6 +64,11 @@ def proxy_of(doc):
     return doc._proxy
 
 
+def doc_icon(doc, masked: bool, fallback):
+    ic = doc.icon if masked else (doc.icon_plain or doc.icon)
+    return ic or fallback
+
+
 def _scaled_doc(doc, k: float):
     if k == 1.0:
         return doc
@@ -117,7 +122,7 @@ def compose(mc: dict, items: list, logo_ov, library, S: int, preview: bool):
             if img is None:
                 continue
         w, h = img.width(), img.height()
-        fake = _scaled_doc(doc, k)
+        fake = _scaled_doc(doc, k) if mc.get("use_mask", True) else SimpleNamespace(layers=[])
         tw, th = max(1, round(rect.width())), max(1, round(rect.height()))
         if not collage and mode == "pad":
             kk = min(tw / w, th / h)
@@ -392,6 +397,10 @@ class MainImagePage(QWidget):
 
     # ---------------------------------------------------------------- 设置面板
     def _build_settings(self):
+        c0 = Card("用哪个版本的图")
+        self.mask_seg = Segmented([("1", "打码后的图"), ("0", "原图（不打码）")])
+        self.mask_seg.changed.connect(self._mask_changed)
+        c0.add(self.mask_seg)
         c1 = Card("主图尺寸")
         self.size_seg = Segmented([(str(k), t) for k, t in SIZES])
         self.size_seg.changed.connect(self._size_changed)
@@ -485,8 +494,13 @@ class MainImagePage(QWidget):
         b_out.clicked.connect(self._choose_out)
         c5.add(row(self.out_lbl, None, b_out))
 
-        area, _ = scroll_page(c1, c2, c3, c4, c5)
+        area, _ = scroll_page(c0, c1, c2, c3, c4, c5)
         return area
+
+    def _mask_changed(self, k):
+        self._set("use_mask", k == "1")
+        self._film_ids = []      # 缩略图换成对应版本
+        self.refresh()
 
     def load_settings(self):
         mc = self.mc
@@ -495,6 +509,7 @@ class MainImagePage(QWidget):
         self.size_seg.set_value(str(size) if size in (800, 1000, 1440) else "0")
         self.custom.setValue(int(mc.get("custom", 1200)))
         self.mode_seg.set_value(mc.get("mode", "smart"))
+        self.mask_seg.set_value("1" if mc.get("use_mask", True) else "0")
         self.pad_color.set_color(mc.get("pad_color", "#ffffff"))
         self.layout_seg.set_value(mc.get("layout", "single"))
         self.cells_seg.set_value(str(mc.get("cells", 2)))
@@ -735,7 +750,7 @@ class MainImagePage(QWidget):
         if self._film_ids != ids:
             self.film.clear()
             for d in docs:
-                it = QListWidgetItem(d.icon or self.mw._placeholder, "")
+                it = QListWidgetItem(doc_icon(d, self.mc.get("use_mask", True), self.mw._placeholder), "")
                 it.setData(Qt.ItemDataRole.UserRole, d.id)
                 it.setToolTip(d.name)
                 self.film.addItem(it)
@@ -769,7 +784,7 @@ class MainImagePage(QWidget):
         for i in range(self.film.count()):
             it = self.film.item(i)
             if it.data(Qt.ItemDataRole.UserRole) == d.id and d.icon is not None:
-                it.setIcon(d.icon)
+                it.setIcon(doc_icon(d, self.mc.get("use_mask", True), self.mw._placeholder))
         if d.id == self.cur_doc_id or any(d.id in g["docs"] for g in self.groups if g["id"] == self.cur_group):
             self.schedule_render()
 
