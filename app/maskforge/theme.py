@@ -47,6 +47,7 @@ QLabel#Warn { color: $warn; font-size: 12px; }
 QLabel#Brand { font-size: 17px; font-weight: 700; }
 QLabel#BrandSub { color: $muted; font-size: 11px; }
 QLabel#BigTitle { font-size: 22px; font-weight: 700; }
+QLabel#StickerPreview { background: $card2; border: 1px solid $line; border-radius: 8px; color: $muted; font-size: 20px; }
 QLabel#Stat { font-size: 20px; font-weight: 700; }
 
 QPushButton { background: $card2; border: 1px solid $line; border-radius: 7px; padding: 6px 12px; min-height: 20px; }

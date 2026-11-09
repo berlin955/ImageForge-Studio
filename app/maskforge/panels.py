@@ -44,36 +44,42 @@ class BatchPanel(QWidget):
         c1.add(row(b_rm, b_clear))
 
         # 2 打码样式
-        c2 = Card("② 打码样式")
-        c2.add(muted("勾选要自动打码的部位，并选择用什么码。选「贴图」时可以用你自己上传的码图。"))
+        c2 = Card("② 用什么码")
+        c2.add(muted("一键打码会按这里的设置给每个部位贴码。点「上传」换成你自己的码图，透明背景的 PNG 效果最好。"))
         grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(8)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(2, 1)
-        self.part_checks, self.style_combos, self.stk_combos = {}, {}, {}
-        for r, (k, n) in enumerate(self.MAIN_PARTS):
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+        self.part_checks, self.style_combos, self.stk_combos, self.previews = {}, {}, {}, {}
+        for i, (k, n) in enumerate(self.MAIN_PARTS):
+            r = i * 2
             cb = QCheckBox(n)
-            cb.setMinimumWidth(64)
             cb.toggled.connect(lambda on, key=k: self._part_set(key, "enabled", on))
+            pv = QLabel()
+            pv.setFixedSize(40, 40)
+            pv.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            pv.setObjectName("StickerPreview")
             st = QComboBox()
             for sk, sn in STYLES:
                 st.addItem(sn, sk)
+            st.setFixedWidth(86)
             st.currentIndexChanged.connect(lambda _i, key=k: self._style_changed(key))
             sc = QComboBox()
             sc.setIconSize(QSize(22, 22))
             sc.currentIndexChanged.connect(lambda _i, key=k: self._sticker_changed(key))
-            grid.addWidget(cb, r, 0)
-            grid.addWidget(st, r, 1)
-            grid.addWidget(sc, r, 2)
-            self.part_checks[k], self.style_combos[k], self.stk_combos[k] = cb, st, sc
+            up = button("上传…", "", f"上传一张码图，{n}改用这张图")
+            up.clicked.connect(lambda _=False, key=k: self._upload_for(key))
+            grid.addWidget(pv, r, 0, 2, 1)
+            grid.addWidget(cb, r, 1, 1, 3)
+            grid.addWidget(st, r + 1, 1)
+            grid.addWidget(sc, r + 1, 2)
+            grid.addWidget(up, r + 1, 3)
+            self.part_checks[k], self.style_combos[k], self.stk_combos[k], self.previews[k] = cb, st, sc, pv
+        grid.setColumnStretch(2, 1)
         c2.add(grid)
-        b_up = button("上传自己的码图…", "", "透明背景的 PNG 效果最好，可以一次选多张")
-        b_up.clicked.connect(self._upload)
-        b_apply = button("应用到已打的码", "", "把上面的样式换到所有图片上已有的码")
+        b_apply = button("把这些样式换到已打的码上", "", "已经打好码的图片也换成上面的样式")
         b_apply.clicked.connect(self._apply_all)
-        c2.add(row(b_up, b_apply))
-        c2.add(muted("码的大小、马赛克颗粒等更多选项在左下角「设置 → 识别与打码」。"))
+        c2.add(b_apply)
+        c2.add(muted("码的大小、马赛克颗粒、有遮挡时是否打码等，在左下角「设置 → 识别与打码」。"))
 
         # 3 一键打码
         c3 = Card("③ 一键打码")
@@ -153,8 +159,21 @@ class BatchPanel(QWidget):
 
     def _update_row(self, k):
         on = self.part_checks[k].isChecked()
+        style = self.style_combos[k].currentData()
         self.style_combos[k].setEnabled(on)
-        self.stk_combos[k].setEnabled(on and self.style_combos[k].currentData() == "sticker")
+        self.stk_combos[k].setEnabled(on and style == "sticker")
+        pv = self.previews[k]
+        p = self.mw.cfg.part(k)
+        if style == "sticker":
+            img = self.mw.library.image(p["sticker"])
+            pm = QPixmap.fromImage(img).scaled(36, 36, Qt.AspectRatioMode.KeepAspectRatio,
+                                               Qt.TransformationMode.SmoothTransformation)
+            pv.setPixmap(pm)
+            pv.setText("")
+        else:
+            pv.setPixmap(QPixmap())
+            pv.setText({"mosaic": "▦", "blur": "◌", "solid": "■"}.get(style, ""))
+        pv.setEnabled(on)
 
     def _part_set(self, key, attr, v):
         if self._loading:
@@ -177,18 +196,17 @@ class BatchPanel(QWidget):
         self.mw.cfg["detect"]["threshold"] = round(1 - v / 100, 3)
         self.mw.cfg.save()
 
-    def _upload(self):
+    def _upload_for(self, key):
         sid = self.mw.upload_stickers()
         if not sid:
             return
-        # 新上传的码图直接设给还在用内置贴图的部位里第一个用「贴图」样式的
-        for k, _n in self.MAIN_PARTS:
-            p = self.mw.cfg.part(k)
-            if p["style"] == "sticker" and p.get("enabled", True):
-                p["sticker"] = sid
-                self.mw.cfg.save()
-                break
+        p = self.mw.cfg.part(key)
+        p["style"] = "sticker"
+        p["sticker"] = sid
+        p["enabled"] = True
+        self.mw.cfg.save()
         self.sync_from_cfg()
+        self.mw.status.showMessage(f"{PART_NAMES.get(key, key)}已改用你上传的码图", 5000)
 
     def _apply_all(self):
         for k, _n in self.MAIN_PARTS:
