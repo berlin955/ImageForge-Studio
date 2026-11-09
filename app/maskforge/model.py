@@ -73,11 +73,14 @@ class _ImageCache:
                 self._d.move_to_end(key)
             return img
 
+    MAX_PIXELS = 160_000_000   # 约 640MB
+
     def put(self, key: str, img: QImage) -> None:
         with self._lock:
             self._d[key] = img
             self._d.move_to_end(key)
-            while len(self._d) > self.size:
+            while len(self._d) > 1 and (len(self._d) > self.size or
+                                        sum(i.width() * i.height() for i in self._d.values()) > self.MAX_PIXELS):
                 self._d.popitem(last=False)
 
     def drop(self, key: str) -> None:
@@ -85,7 +88,7 @@ class _ImageCache:
             self._d.pop(key, None)
 
 
-IMAGE_CACHE = _ImageCache()
+IMAGE_CACHE = _ImageCache(3)
 
 
 class ImageDoc:

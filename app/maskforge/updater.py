@@ -36,22 +36,71 @@ def _ctx():
         return None
 
 
-# 直连 GitHub 不通时依次尝试的下载加速镜像（下载后都会校验 SHA256，校验不通过不会安装）
-MIRRORS = [
-    "",
-    "https://ghfast.top/",
-    "https://gh-proxy.com/",
-    "https://ghproxy.net/",
+# 直连 GitHub 不通时依次尝试的加速镜像（下载的安装包都会校验 SHA256，校验不通过不会安装）
+BUILTIN_MIRRORS = [
+    ("https://ghfast.top/", "ghfast.top"),
+    ("https://gh-proxy.com/", "gh-proxy.com"),
+    ("https://ghproxy.net/", "ghproxy.net"),
 ]
+MIRRORS = [""] + [m for m, _ in BUILTIN_MIRRORS]
+LATEST_JSON = f"https://github.com/{REPO}/releases/latest/download/latest.json"
+
+
+def set_preference(choice: str, custom: str = "") -> None:
+    """choice: auto | direct | 某个镜像地址 | custom。选中的线路排在最前面，其余作为备用。"""
+    global MIRRORS
+    order = [""] + [m for m, _ in BUILTIN_MIRRORS]
+    first = None
+    if choice == "direct":
+        first = ""
+    elif choice == "custom" and custom.strip():
+        first = custom.strip()
+        if not first.endswith("/"):
+            first += "/"
+        if not first.startswith("http"):
+            first = "https://" + first
+    elif choice in order:
+        first = choice
+    if first is not None:
+        order = [first] + [m for m in order if m != first]
+    MIRRORS = order
+
+
+def _label(mirror: str) -> str:
+    return "GitHub" if not mirror else mirror.split("/")[2]
 
 _SHA_RE = re.compile(r"sha256:([^\s=]+)=([0-9a-fA-F]{64})")
 
 
-def fetch_latest(timeout: float = 10) -> dict:
-    req = urllib.request.Request(API_LATEST, headers={
-        "Accept": "application/vnd.github+json", "User-Agent": UA})
+def _get_json(url: str, timeout: float) -> dict:
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github+json, application/json", "User-Agent": UA})
     with urllib.request.urlopen(req, timeout=timeout, context=_ctx()) as r:
-        data = json.loads(r.read().decode("utf-8"))
+        return json.loads(r.read().decode("utf-8-sig"))
+
+
+def fetch_latest(timeout: float = 8) -> dict:
+    """先问 GitHub 接口，连不上再通过镜像读取发布时附带的 latest.json。"""
+    errors = []
+    if MIRRORS and MIRRORS[0] == "":
+        try:
+            return _parse_api(_get_json(API_LATEST, timeout))
+        except Exception as e:
+            errors.append(f"GitHub: {e}")
+    for m in MIRRORS:
+        try:
+            info = _get_json(m + LATEST_JSON, timeout)
+            if info.get("version"):
+                info.setdefault("notes", "")
+                info.setdefault("page", f"https://github.com/{REPO}/releases/latest")
+                info["sha256"] = (info.get("sha256") or "").lower()
+                return info
+        except Exception as e:
+            errors.append(f"{_label(m)}: {e}")
+    raise IOError("；".join(errors[-3:]) or "无法连接")
+
+
+def _parse_api(data: dict) -> dict:
     tag = data.get("tag_name", "")
     body = data.get("body") or ""
     asset = None
@@ -147,7 +196,7 @@ class Downloader(QThread):
         for mirror in MIRRORS:
             if mirror and not self.sha256:
                 continue  # 没有校验值时只用官方地址
-            label = "GitHub" if not mirror else mirror.split("/")[2]
+            label = _label(mirror)
             for attempt in range(3):
                 if self.isInterruptionRequested():
                     self.failed.emit("已取消")

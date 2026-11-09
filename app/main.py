@@ -22,10 +22,10 @@ def main() -> int:
         from maskforge.selftest import run_selftest
         return run_selftest(_arg("--selftest-log"))
 
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import Qt, QTimer
     from PySide6.QtWidgets import QApplication, QMessageBox
 
-    from maskforge import APP_NAME, APP_NAME_EN, AUTHOR, theme
+    from maskforge import APP_NAME, APP_NAME_EN, AUTHOR, __version__, theme
     from maskforge.config import Config, data_dir
     from maskforge.mainwindow import MainWindow, app_icon
     from maskforge.stickers import StickerLibrary
@@ -45,22 +45,48 @@ def main() -> int:
 
     log_file = data_dir() / "error.log"
 
+    # 记录闪退（程序直接退出）时的现场，方便排查
+    try:
+        import faulthandler
+        _crash = open(data_dir() / "crash.log", "a", encoding="utf-8")
+        _crash.write(f"\n===== start v{__version__} =====\n")
+        _crash.flush()
+        faulthandler.enable(file=_crash, all_threads=True)
+    except Exception:
+        pass
+
+    state = {"last": 0.0, "showing": False}
+
+    def show_error(msg):
+        if state["showing"]:
+            return
+        state["showing"] = True
+        try:
+            QMessageBox.critical(None, "出错了",
+                                 f"软件遇到一个错误，已记录到：\n{log_file}\n\n{msg}\n\n"
+                                 "软件可以继续使用。如果反复出现，请把这个文件发给作者。")
+        finally:
+            state["showing"] = False
+
     def excepthook(t, v, tb):
+        import time
         text = "".join(traceback.format_exception(t, v, tb))
         try:
             with open(log_file, "a", encoding="utf-8") as f:
-                f.write(text + "\n")
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + f"v{__version__}\n" + text + "\n")
         except Exception:
             pass
-        try:
-            QMessageBox.critical(None, "出错了",
-                                 f"软件遇到一个错误，已记录到：\n{log_file}\n\n{v}")
-        except Exception:
-            pass
+        now = time.time()
+        if now - state["last"] > 5:
+            state["last"] = now
+            # 不在出错的地方（可能是绘制中）直接弹窗，放到下一轮事件循环
+            QTimer.singleShot(0, lambda: show_error(v))
 
     sys.excepthook = excepthook
 
     cfg = Config()
+    from maskforge.updater import set_preference
+    set_preference(cfg["update_mirror"], cfg["update_mirror_custom"])
     theme.apply(app, cfg["theme"])
     lib = StickerLibrary()
     w = MainWindow(cfg, lib)
@@ -71,7 +97,6 @@ def main() -> int:
         w.import_paths(files)
 
     if cfg["check_update"] and getattr(sys, "frozen", False):
-        from PySide6.QtCore import QTimer
         QTimer.singleShot(2500, lambda: w.check_updates(manual=False))
 
     return app.exec()

@@ -264,10 +264,8 @@ class MainWindow(QMainWindow):
         sc("PgDown", lambda: self.go(self.cur + 1))
         sc("PgUp", lambda: self.go(self.cur - 1))
         sc("Ctrl+,", self.open_settings)
-        sc(["Delete", "Backspace"], self.delete_layer, wsc, self.canvas)
-        sc("Ctrl+D", self.duplicate_layer, wsc, self.canvas)
-        sc(["Return", "Enter"], self.confirm_next, wsc, self.canvas)
-        sc("F", self.canvas.fit, wsc, self.canvas)
+        sc("Ctrl+D", self.duplicate_layer)
+        QApplication.instance().installEventFilter(self)
 
     def show_tab(self, i: int):
         self.stack.setCurrentIndex(i)
@@ -341,6 +339,7 @@ class MainWindow(QMainWindow):
             self.film.addItem(it)
             task = ThumbTask(d.id, str(d.path), 360)
             task.signals.done.connect(self._thumb_done)
+            task.setAutoDelete(False)
             self._thumb_tasks.append(task)
             self.pool.start(task)
         self.status.showMessage(f"已导入 {len(new)} 张图片", 5000)
@@ -984,6 +983,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "无法启动安装程序", f"{e}\n\n安装包在：{path}")
                 return
             self.cfg.save()
+            dl.wait(5000)
+            self._stop_threads()
             QApplication.quit()
 
         def fail(msg):
@@ -1011,6 +1012,51 @@ class MainWindow(QMainWindow):
         dlg.canceled.connect(dl.requestInterruption)
         dl.start()
 
+    # ================================================================= 全局按键
+    def _typing(self) -> bool:
+        from PySide6.QtWidgets import (QAbstractItemView, QAbstractSlider, QAbstractSpinBox,
+                                       QComboBox, QLineEdit, QTextEdit)
+        w = QApplication.focusWidget()
+        return isinstance(w, (QLineEdit, QTextEdit, QAbstractSpinBox, QComboBox, QAbstractSlider,
+                              QAbstractItemView)) and w is not self.film
+
+    def eventFilter(self, obj, ev):
+        from PySide6.QtCore import QEvent
+        t = ev.type()
+        if t not in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+            return False
+        if not self.isActiveWindow() or QApplication.activeModalWidget() is not None:
+            return False
+        if self._typing():
+            return False
+        k = ev.key()
+        if t == QEvent.Type.KeyRelease:
+            if k == Qt.Key.Key_Space and not ev.isAutoRepeat():
+                self.canvas.set_peek(self.b_peek.isChecked())
+                return True
+            return False
+        mods = ev.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+        if mods not in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.ShiftModifier):
+            return False
+        if k == Qt.Key.Key_Space:
+            if not ev.isAutoRepeat():
+                self.canvas.set_peek(True)
+            return True
+        if k in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.confirm_next()
+            return True
+        if k in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self.delete_layer()
+            return True
+        if k == Qt.Key.Key_F and mods == Qt.KeyboardModifier.NoModifier:
+            self.canvas.fit()
+            return True
+        if k in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Escape):
+            if obj is not self.canvas and obj is not self.canvas.viewport():
+                self.canvas.keyPressEvent(ev)
+                return True
+        return False
+
     # ================================================================= 窗口
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls():
@@ -1021,9 +1067,18 @@ class MainWindow(QMainWindow):
         if paths:
             self.import_paths(paths)
 
+    def _stop_threads(self):
+        for t in (self._worker, getattr(self, "_upd", None), getattr(self, "_dl", None)):
+            try:
+                if t is not None and t.isRunning():
+                    t.requestInterruption()
+                    t.wait(20000)
+            except RuntimeError:
+                pass
+        self.pool.clear()
+        self.pool.waitForDone(10000)
+
     def closeEvent(self, e):
-        if self._worker and self._worker.isRunning():
-            self._worker.requestInterruption()
-            self._worker.wait(3000)
+        self._stop_threads()
         self.cfg.save()
         super().closeEvent(e)

@@ -7,7 +7,7 @@ import sys
 from PySide6.QtCore import QSize, Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog,
-                               QFormLayout, QGridLayout, QHBoxLayout, QLabel, QListWidget,
+                               QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMessageBox, QStackedWidget, QVBoxLayout,
                                QWidget)
 
@@ -72,6 +72,24 @@ class SettingsDialog(QDialog):
         self.auto_upd.toggled.connect(lambda on: self._save("check_update", on))
         c2.add(self.auto_upd)
         c2.add(muted(f"当前版本 v{__version__}。新版本发布在 GitHub，检查到后会提示一键更新。"))
+        from .updater import BUILTIN_MIRRORS
+        self.mirror = QComboBox()
+        self.mirror.addItem("自动（先连 GitHub，不通就换镜像）", "auto")
+        self.mirror.addItem("GitHub 直连", "direct")
+        for m, name in BUILTIN_MIRRORS:
+            self.mirror.addItem(f"镜像：{name}", m)
+        self.mirror.addItem("自定义镜像…", "custom")
+        self.mirror.setCurrentIndex(max(0, self.mirror.findData(self.cfg["update_mirror"])))
+        self.mirror_custom = QLineEdit(self.cfg["update_mirror_custom"])
+        self.mirror_custom.setPlaceholderText("例如 https://你的镜像地址/ （会拼在 GitHub 链接前面）")
+        self.mirror_custom.setVisible(self.cfg["update_mirror"] == "custom")
+        self.mirror.currentIndexChanged.connect(self._mirror_changed)
+        self.mirror_custom.editingFinished.connect(self._mirror_changed)
+        lab2 = QLabel("更新线路")
+        lab2.setFixedWidth(80)
+        c2.add(row(lab2, self.mirror))
+        c2.add(self.mirror_custom)
+        c2.add(muted("选中的线路优先使用，连不上时会自动换其他线路。不管走哪条线路，安装包都会核对官方的 SHA256 校验值。"))
         b = button("立即检查更新")
         b.clicked.connect(lambda: self.mw.check_updates(manual=True))
         c2.add(row(b, None))
@@ -85,6 +103,15 @@ class SettingsDialog(QDialog):
         c3.add(row(b2, b3, None))
         area, _ = scroll_page(c1, c2, c3)
         return area
+
+    def _mirror_changed(self, *_):
+        choice = self.mirror.currentData()
+        self.mirror_custom.setVisible(choice == "custom")
+        self.cfg["update_mirror"] = choice
+        self.cfg["update_mirror_custom"] = self.mirror_custom.text().strip()
+        self.cfg.save()
+        from .updater import set_preference
+        set_preference(choice, self.cfg["update_mirror_custom"])
 
     def _theme_changed(self, _i):
         self._save("theme", self.theme.currentData())

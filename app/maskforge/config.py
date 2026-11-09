@@ -61,6 +61,8 @@ DEFAULTS: dict = {
     "config_version": CONFIG_VERSION,
     "theme": "dark",
     "check_update": True,
+    "update_mirror": "auto",          # auto | direct | 镜像地址 | custom
+    "update_mirror_custom": "",
     "skip_version": "",
     "last_dir": "",
     "detect": {

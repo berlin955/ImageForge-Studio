@@ -71,6 +71,16 @@ def run_selftest(log_path: str | None = None) -> int:
                           1200, 1600, cfg)
         assert [l.part for l in cov] == ["crack"] and abs(cov[0].cx - 640) < 1, [(l.part, l.cx) for l in cov]
         log("planner covered ok")
+        from .detector import merge_buttocks
+        stacked = plan_layers(merge_buttocks([
+            {"label": "BUTTOCKS_EXPOSED", "score": 0.7, "box": (400, 1000, 800, 1300)},
+            {"label": "ANUS_EXPOSED", "score": 0.5, "box": (580, 1250, 620, 1290)},
+            {"label": "BUTTOCKS_EXPOSED", "score": 0.4, "box": (420, 1150, 780, 1450)}]), 1200, 1600, cfg)
+        assert [l.part for l in stacked] == ["crack"], [(l.part, l.cy) for l in stacked]
+        halves = merge_buttocks([{"label": "BUTTOCKS_EXPOSED", "score": 0.6, "box": (400, 1000, 600, 1300)},
+                                 {"label": "BUTTOCKS_EXPOSED", "score": 0.6, "box": (590, 1010, 800, 1310)}])
+        assert len(halves) == 1, halves
+        log("one crack mask ok")
 
         theme.apply(app, "dark")
         mw = MainWindow(cfg, lib)

@@ -114,7 +114,6 @@ class Detector:
         xyxy[:, [0, 2]] = xyxy[:, [0, 2]].clip(0, w)
         xyxy[:, [1, 3]] = xyxy[:, [1, 3]].clip(0, h)
 
-        gray = rgb.astype(np.float32).mean(2)
         res = []
         for c in np.unique(cls):
             if c >= len(LABELS):
@@ -122,14 +121,40 @@ class Detector:
             idx = np.where(cls == c)[0]
             for k in _nms(xyxy[idx], sc[idx]):
                 i = idx[k]
-                d = {"label": LABELS[int(c)], "score": float(sc[i]),
-                     "box": tuple(float(v) for v in xyxy[i])}
-                if d["label"].startswith("BUTTOCKS"):
-                    cx_ = _crack_x(gray, xyxy[i] * scale)
-                    if cx_ is not None:
-                        d["crack_x"] = cx_ / scale
-                res.append(d)
+                res.append({"label": LABELS[int(c)], "score": float(sc[i]),
+                            "box": tuple(float(v) for v in xyxy[i])})
+
+        res = merge_buttocks(res)
+        gray = rgb.astype(np.float32).mean(2)
+        for d in res:
+            if d["label"].startswith("BUTTOCKS"):
+                cx_ = _crack_x(gray, np.array(d["box"]) * scale)
+                if cx_ is not None:
+                    d["crack_x"] = cx_ / scale
         return res
+
+
+def merge_buttocks(dets: list[dict]) -> list[dict]:
+    """模型常把左右两半臀部识别成两个框，合并成一个，股沟只打一个码。"""
+    butt = [d for d in dets if d["label"].startswith("BUTTOCKS")]
+    others = [d for d in dets if not d["label"].startswith("BUTTOCKS")]
+    groups: list[dict] = []
+    for d in sorted(butt, key=lambda d: d["box"][0]):
+        x1, y1, x2, y2 = d["box"]
+        for g in groups:
+            gx1, gy1, gx2, gy2 = g["box"]
+            v_overlap = min(y2, gy2) - max(y1, gy1)
+            gap = max(x1, gx1) - min(x2, gx2)     # 负数表示横向有重叠
+            width = max(x2 - x1, gx2 - gx1)
+            if v_overlap > 0.4 * min(y2 - y1, gy2 - gy1) and gap < 0.35 * width:
+                g["box"] = (min(x1, gx1), min(y1, gy1), max(x2, gx2), max(y2, gy2))
+                if d["label"].endswith("EXPOSED"):
+                    g["label"] = d["label"]
+                g["score"] = max(g["score"], d["score"])
+                break
+        else:
+            groups.append(dict(d))
+    return others + groups
 
 
 def _crack_x(gray: np.ndarray, box) -> float | None:
@@ -221,7 +246,9 @@ def plan_layers(dets: list[dict], img_w: int, img_h: int, cfg) -> list[Layer]:
     cands.sort(key=lambda l: l.score, reverse=True)
     kept: list[Layer] = []
     for l in cands:
-        dup = any(k.part == l.part and math.hypot(k.cx - l.cx, k.cy - l.cy) < 0.5 * max(k.w, k.h, l.w, l.h)
+        # 乳晕左右各一个；下体、股沟靠得近的只留一个
+        f = 0.5 if l.part == "areola" else 1.2
+        dup = any(k.part == l.part and math.hypot(k.cx - l.cx, k.cy - l.cy) < f * max(k.w, k.h, l.w, l.h)
                   for k in kept)
         if not dup:
             kept.append(l)
