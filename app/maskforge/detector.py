@@ -134,6 +134,17 @@ class Detector:
         return res
 
 
+def subject_of(dets: list[dict]):
+    """所有识别结果的外框当作「人物范围」，另外返回最上面那张脸的位置。用于主图裁切。"""
+    if not dets:
+        return None, None
+    xs1, ys1, xs2, ys2 = zip(*[d["box"] for d in dets])
+    subject = (min(xs1), min(ys1), max(xs2), max(ys2))
+    faces = [d["box"] for d in dets if d["label"].startswith("FACE")]
+    face = min(faces, key=lambda b: b[1]) if faces else None
+    return subject, face
+
+
 def merge_buttocks(dets: list[dict]) -> list[dict]:
     """模型常把左右两半臀部识别成两个框，合并成一个，股沟只打一个码。"""
     butt = [d for d in dets if d["label"].startswith("BUTTOCKS")]

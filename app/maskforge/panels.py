@@ -292,7 +292,7 @@ class SidePanel(QWidget):
         fv.addWidget(self.foot_stat)
         self.b_preview = button("预览全部")
         self.b_preview.clicked.connect(mw.open_preview)
-        self.b_ok = button("确认，下一张", tip="Enter")
+        self.b_ok = button("没问题，看下一张需要注意的", tip="Enter")
         self.b_ok.clicked.connect(mw.confirm_next)
         fv.addLayout(row(self.b_preview, self.b_ok))
         self.b_export = button("导出", "Primary", "Ctrl+E")
@@ -322,9 +322,8 @@ class SidePanel(QWidget):
         self.drop.setVisible(not has)
         for s in (self.s_files, self.s_auto, self.s_img):
             s.setVisible(has)
-        cnt = {"todo": 0, "done": 0, "none": 0, "ok": 0, "error": 0}
-        for d in docs:
-            cnt[d.status()] += 1
+        from .mainwindow import count_status
+        cnt = count_status(docs)
         self.files_lbl.setText(f"{n} 张图片")
         pending = cnt["todo"]
         busy = mw.busy
@@ -360,13 +359,13 @@ class SidePanel(QWidget):
         self.b_prev.setEnabled(bool(prev and prev.layers))
 
         self.foot_stat.setText(
-            (f"已确认 {cnt['ok']}/{n}　·　待检查 {cnt['done']}　·　未检出 {cnt['none']}"
+            (f"已打码 {cnt['done']}　·　需要注意 {cnt['attention']}"
              + (f"　·　未处理 {cnt['todo']}" if cnt["todo"] else "")) if has else "导入图片后开始")
         targets = mw.export_targets()
         self.b_export.setText(f"导出 {len(targets)} 张" if targets else "导出")
         self.b_export.setEnabled(bool(targets) and not busy)
         self.b_preview.setEnabled(has and not busy)
-        self.b_ok.setEnabled(bool(doc))
+        self.b_ok.setEnabled(bool(doc) and cnt["attention"] > 0)
         self.refresh_selection()
 
     def refresh_selection(self):
@@ -551,7 +550,7 @@ class ExportDialog(QDialog):
         b_dir = button("浏览…")
         b_dir.clicked.connect(self._choose_dir)
         c1.add(row(self.dir_edit, b_dir))
-        self.scope = Segmented([("all", "全部图片"), ("confirmed", "仅已确认")])
+        self.scope = Segmented([("all", "全部图片"), ("skip_attention", "跳过需要注意的")])
         self.scope.changed.connect(lambda k: self._set("scope", k))
         c1.add(self.scope)
 

@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstract
 from . import APP_NAME, APP_NAME_EN, AUTHOR, __version__, theme
 from .canvas import Canvas
 from .config import IMAGE_EXTS, PART_NAMES, icon_path, model_path
-from .detector import Detector, plan_layers
+from .detector import Detector, plan_layers, subject_of
 from .exporter import output_name, render_doc, render_preview, save_image, unique_path
 from .model import IMAGE_CACHE, ImageDoc, Layer, natural_key
 from .panels import ExportDialog, SidePanel
@@ -26,7 +26,14 @@ from .updater import Downloader, UpdateChecker, is_newer, launch_installer
 from .widgets import button
 from .workers import DetectWorker, ThumbTask
 
-STATUS_COLORS = {"todo": "muted", "done": "accent", "none": "warn", "ok": "ok", "error": "danger"}
+STATUS_COLORS = {"todo": "muted", "attention": "warn", "done": "ok", "error": "danger"}
+
+
+def count_status(docs) -> dict:
+    cnt = {"todo": 0, "attention": 0, "done": 0, "error": 0}
+    for d in docs:
+        cnt[d.status()] += 1
+    return cnt
 
 
 def app_icon() -> QIcon:
@@ -74,36 +81,27 @@ class MainWindow(QMainWindow):
 
     # ================================================================= 界面
     def _build(self):
-        central = QWidget()
-        root = QVBoxLayout(central)
+        # 「智能打码」页
+        self.mask_page = QWidget()
+        root = QVBoxLayout(self.mask_page)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ---- 顶部：品牌 + 流程 + 主题/设置 ----
+        # ---- 顶部：打码流程 ----
         top = QFrame()
         top.setObjectName("TopBar")
         th = QHBoxLayout(top)
         th.setContentsMargins(16, 8, 12, 8)
         th.setSpacing(10)
-        logo = QLabel()
-        logo.setPixmap(app_icon().pixmap(30, 30))
-        logo.setFixedSize(30, 30)
-        names = QVBoxLayout()
-        names.setSpacing(0)
-        t1 = QLabel(APP_NAME)
-        t1.setObjectName("Brand")
-        t2 = QLabel(APP_NAME_EN.upper())
-        t2.setObjectName("BrandSub")
-        names.addWidget(t1)
-        names.addWidget(t2)
-        th.addWidget(logo)
-        th.addLayout(names)
-        th.addSpacing(30)
+        pt = QLabel("智能打码")
+        pt.setObjectName("Brand")
+        th.addWidget(pt)
+        th.addSpacing(24)
         self.steps = []
         for i, (title, fn, tip) in enumerate((
                 ("导入", self.import_dialog, "导入图片或文件夹"),
                 ("一键打码", self.auto_mask, "AI 识别并自动贴码"),
-                ("检查", self.next_pending, "跳到下一张需要检查的图片"),
+                ("检查", self.next_pending, "跳到下一张需要注意的图片"),
                 ("导出", self.export_batch, "按导出设置批量保存"))):
             b = QPushButton()
             b.setObjectName("Step")
@@ -117,12 +115,6 @@ class MainWindow(QMainWindow):
                 arrow.setObjectName("Muted")
                 th.addWidget(arrow)
         th.addStretch(1)
-        self.b_theme = button("主题", "Ghost", "切换配色")
-        self.b_theme.clicked.connect(self._theme_menu)
-        b_set = button("设置", "Ghost", "Ctrl+,")
-        b_set.clicked.connect(lambda: self.open_settings())
-        th.addWidget(self.b_theme)
-        th.addWidget(b_set)
         root.addWidget(top)
 
         body = QHBoxLayout()
@@ -220,7 +212,7 @@ class MainWindow(QMainWindow):
         fh.setSpacing(6)
         self.filter_group = QButtonGroup(self)
         self.filter_btns = {}
-        for key, text in (("all", "全部"), ("check", "需要检查"), ("ok", "已确认")):
+        for key, text in (("all", "全部"), ("check", "需要注意"), ("ok", "已打码")):
             b = button(text, "Chip")
             b.setCheckable(True)
             self.filter_group.addButton(b)
@@ -252,10 +244,108 @@ class MainWindow(QMainWindow):
         body.addWidget(work, 1)
         root.addLayout(body, 1)
 
-        self.setCentralWidget(central)
+        self._build_shell()
         self.status = QStatusBar()
         self.setStatusBar(self.status)
         self._placeholder = self._make_placeholder()
+
+    # ---- 外壳：左侧功能栏 + 各功能页 ----
+    NAV = [
+        ("assets", "▦", "素材"),
+        ("mask", "◐", "智能打码"),
+        ("main", "▣", "批量主图"),
+        ("spec", "▤", "智能规格"),
+        ("detail", "☰", "智能详情"),
+        ("watermark", "◎", "批量水印"),
+        ("templates", "❖", "模板库"),
+    ]
+
+    def _build_shell(self):
+        from .pages import AssetsPage, ComingSoonPage
+        from .mainimage import MainImagePage
+        central = QWidget()
+        h = QHBoxLayout(central)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
+
+        nav = QFrame()
+        nav.setObjectName("NavRail")
+        nav.setFixedWidth(88)
+        nv = QVBoxLayout(nav)
+        nv.setContentsMargins(8, 12, 8, 10)
+        nv.setSpacing(4)
+        logo = QLabel()
+        logo.setPixmap(app_icon().pixmap(36, 36))
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo.setToolTip(f"{APP_NAME} {APP_NAME_EN}  v{__version__}")
+        nv.addWidget(logo)
+        brand = QLabel(APP_NAME)
+        brand.setObjectName("NavBrand")
+        brand.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        nv.addWidget(brand)
+        nv.addSpacing(10)
+
+        self.pages = QStackedWidget()
+        self.page_keys: list[str] = []
+        self.nav_group = QButtonGroup(self)
+        self.nav_btns = {}
+        self.assets_page = AssetsPage(self)
+        self.main_page = MainImagePage(self)
+        built = {"assets": self.assets_page, "mask": self.mask_page, "main": self.main_page}
+        soon = {
+            "spec": ("智能规格", "导入一张喜欢的规格图，自动挖空原来的模特照片、识别文字，换成你的模特图，文字可以随时修改。"),
+            "detail": ("智能详情", "和智能规格一样换模特、改文字，支持很长的详情图，导出时可以自动切成几段。"),
+            "watermark": ("批量水印", "给打码图、主图、规格图、详情图批量加上你的 Logo，透明度、位置、大小可调，每张还能单独挪位置。"),
+            "templates": ("模板库", "保存好的规格、详情、主图模板都在这里，下次新款直接套用。"),
+        }
+        for key, glyph, text in self.NAV:
+            b = QPushButton(f"{glyph}\n{text}")
+            b.setObjectName("NavBtn")
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _=False, k=key: self.show_page(k))
+            self.nav_group.addButton(b)
+            self.nav_btns[key] = b
+            nv.addWidget(b)
+            page = built.get(key) or ComingSoonPage(*soon[key])
+            self.pages.addWidget(page)
+            self.page_keys.append(key)
+        nv.addStretch(1)
+        self.b_theme = QPushButton("◑\n主题")
+        self.b_theme.setObjectName("NavBtn")
+        self.b_theme.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.b_theme.clicked.connect(self._theme_menu)
+        b_set = QPushButton("⚙\n设置")
+        b_set.setObjectName("NavBtn")
+        b_set.setCursor(Qt.CursorShape.PointingHandCursor)
+        b_set.setToolTip("Ctrl+,")
+        b_set.clicked.connect(lambda: self.open_settings())
+        nv.addWidget(self.b_theme)
+        nv.addWidget(b_set)
+        ver = QLabel(f"v{__version__}")
+        ver.setObjectName("Muted")
+        ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        nv.addWidget(ver)
+
+        h.addWidget(nav)
+        h.addWidget(self.pages, 1)
+        self.setCentralWidget(central)
+        self.show_page("assets")
+
+    def current_page(self) -> str:
+        i = self.pages.currentIndex()
+        return self.page_keys[i] if 0 <= i < len(self.page_keys) else ""
+
+    def show_page(self, key: str):
+        if key not in self.page_keys:
+            return
+        self.pages.setCurrentIndex(self.page_keys.index(key))
+        self.nav_btns[key].setChecked(True)
+        page = self.pages.currentWidget()
+        if hasattr(page, "on_show"):
+            page.on_show()
+        if key == "mask":
+            self.canvas.setFocus()
 
     def _make_placeholder(self) -> QIcon:
         pm = QPixmap(104, 104)
@@ -303,8 +393,8 @@ class MainWindow(QMainWindow):
         return None
 
     def export_targets(self) -> list[ImageDoc]:
-        if self.cfg["export"].get("scope") == "confirmed":
-            return [d for d in self.docs if d.confirmed and not d.error]
+        if self.cfg["export"].get("scope") == "skip_attention":
+            return [d for d in self.docs if not d.error and d.status() != "attention"]
         return [d for d in self.docs if not d.error]
 
     # ================================================================= 导入
@@ -355,7 +445,7 @@ class MainWindow(QMainWindow):
             task.signals.done.connect(self._thumb_done)
             self._thumb_tasks.append(task)
             self.pool.start(task)
-        self.status.showMessage(f"已导入 {len(new)} 张图片，点「一键打码」开始", 6000)
+        self.status.showMessage(f"已导入 {len(new)} 张图片", 6000)
         self.go(first)
 
     def _thumb_done(self, did, img: QImage, w, h):
@@ -383,11 +473,16 @@ class MainWindow(QMainWindow):
     def _set_film_icon(self, d: ImageDoc):
         if d.thumb is None or d not in self.docs:
             return
+        img = render_preview(d, d.thumb, self.library)
+        if img is None or img.isNull():
+            return
+        d.icon = QIcon(QPixmap.fromImage(img))
         it = self.film.item(self.docs.index(d))
         if it:
-            img = render_preview(d, d.thumb, self.library)
-            if img is not None and not img.isNull():
-                it.setIcon(QIcon(QPixmap.fromImage(img)))
+            it.setIcon(d.icon)
+        if hasattr(self, "assets_page"):
+            self.assets_page.update_icon(d)
+            self.main_page.update_icon(d)
 
     def mark_thumb_dirty(self, d: ImageDoc | None = None):
         d = d or self.cur_doc()
@@ -422,7 +517,7 @@ class MainWindow(QMainWindow):
         d = self.docs[row]
         st = d.status()
         f = self.film_filter
-        hide = (f == "check" and st not in ("done", "none", "todo", "error")) or (f == "ok" and st != "ok")
+        hide = (f == "check" and st not in ("attention", "error")) or (f == "ok" and st != "done")
         self.film.setRowHidden(row, hide and row != self.cur)
 
     def set_film_filter(self, key: str):
@@ -499,23 +594,20 @@ class MainWindow(QMainWindow):
             return
         order = list(range(self.cur + 1, len(self.docs))) + list(range(0, self.cur + 1))
         for i in order:
-            if self.docs[i].status() in ("done", "none", "todo"):
+            if self.docs[i].status() == "attention":
                 self.go(i)
                 return
-        self.status.showMessage("没有需要检查的图片了，可以导出了", 5000)
+        self.status.showMessage("没有需要注意的图片了，可以导出了", 5000)
 
     def confirm_next(self):
         d = self.cur_doc()
         if not d:
             return
-        d.confirmed = True
+        # 看过了：这张不再算「需要注意」，跳到下一张需要注意的
+        d.reviewed = True
         self._update_film_item(self.cur)
-        for i in list(range(self.cur + 1, len(self.docs))) + list(range(0, self.cur)):
-            if not self.docs[i].confirmed and not self.docs[i].error:
-                self.go(i)
-                return
         self.refresh_all()
-        self.status.showMessage("全部图片都已确认，可以导出了", 6000)
+        self.next_pending()
 
     # ================================================================= 刷新
     def refresh_all(self):
@@ -532,17 +624,19 @@ class MainWindow(QMainWindow):
         self.b_next.setEnabled(0 <= self.cur < n - 1)
         self._update_steps()
         self.side.refresh()
+        if hasattr(self, "assets_page"):
+            self.assets_page.refresh()
+            self.main_page.refresh()
 
     def _update_steps(self):
         n = len(self.docs)
-        cnt = {"todo": 0, "done": 0, "none": 0, "ok": 0, "error": 0}
-        for d in self.docs:
-            cnt[d.status()] += 1
+        cnt = count_status(self.docs)
         masked = n - cnt["todo"] - cnt["error"]
         states = [
             (n > 0, f"① 导入  {n}" if n else "① 导入"),
             (n > 0 and cnt["todo"] == 0, f"② 一键打码  {masked}/{n}" if n else "② 一键打码"),
-            (n > 0 and cnt["ok"] == n, f"③ 检查  {cnt['ok']}/{n}" if n else "③ 检查"),
+            (n > 0 and cnt["todo"] == 0 and cnt["attention"] == 0,
+             f"③ 需要注意  {cnt['attention']}" if cnt["attention"] else "③ 检查"),
             (False, "④ 导出"),
         ]
         for (b, _t), (done, text) in zip(self.steps, states):
@@ -550,8 +644,8 @@ class MainWindow(QMainWindow):
             b.setObjectName("StepDone" if done else "Step")
             b.style().unpolish(b)
             b.style().polish(b)
-        need = cnt["done"] + cnt["none"]
-        self.film_hint.setText(f"{need} 张需要检查" if need else "")
+        need = cnt["attention"]
+        self.film_hint.setText(f"{need} 张需要注意" if need else "")
 
     def _refresh_doc_state(self):
         if self.cur >= 0:
@@ -564,6 +658,7 @@ class MainWindow(QMainWindow):
         d = self.cur_doc()
         if d:
             d.push()
+            d.reviewed = True
 
     def _on_edited(self):
         self.side.sync_geometry()
@@ -578,6 +673,7 @@ class MainWindow(QMainWindow):
             return
         if push:
             d.push()
+        d.reviewed = True
         fn(L)
         self.canvas.update_layer(L)
         self.mark_thumb_dirty(d)
@@ -601,6 +697,7 @@ class MainWindow(QMainWindow):
         L = Layer(part=part, style=p["style"], sticker=p["sticker"], color=p["color"], block=p["block"],
                   opacity=p.get("opacity", 1.0), cx=x, cy=y, w=base[0] * d.w, h=base[1] * d.w)
         d.layers.append(L)
+        d.reviewed = True
         self.canvas.rebuild(select_id=L.id)
         self._refresh_doc_state()
         self.status.showMessage(f"已添加{PART_NAMES.get(part, part)}的码。双击图片可以在点击的位置继续添加", 5000)
@@ -624,7 +721,7 @@ class MainWindow(QMainWindow):
             return
         d.push()
         d.layers = [l for l in d.layers if l.id != L.id]
-        d.confirmed = d.confirmed and bool(d.layers)
+        d.reviewed = True
         self.canvas.rebuild(select_id="")
         self._refresh_doc_state()
 
@@ -634,7 +731,6 @@ class MainWindow(QMainWindow):
             return
         d.push()
         d.layers = []
-        d.confirmed = False
         self.canvas.rebuild(select_id="")
         self._refresh_doc_state()
 
@@ -732,11 +828,12 @@ class MainWindow(QMainWindow):
         if not d:
             return
         d.w, d.h = w, h
+        d.subject, d.face = subject_of(dets)
         layers = plan_layers(dets, w, h, self.cfg)
         if self._replace or not d.layers:
             d.push()
             d.layers = layers
-            d.confirmed = False
+            d.reviewed = False
         d.detected = True
         d.error = ""
         self._det_found += len(layers)
@@ -1058,6 +1155,8 @@ class MainWindow(QMainWindow):
         if t not in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
             return False
         if not self.isActiveWindow() or QApplication.activeModalWidget() is not None:
+            return False
+        if self.current_page() != "mask":
             return False
         if self._typing():
             return False

@@ -10,7 +10,7 @@ from . import theme
 from .exporter import render_preview
 from .widgets import Segmented, button, muted
 
-STATUS_KEYS = {"todo": "muted", "done": "accent", "none": "warn", "ok": "ok", "error": "danger"}
+STATUS_KEYS = {"todo": "muted", "attention": "warn", "done": "ok", "error": "danger"}
 
 
 class PreviewDialog(QDialog):
@@ -40,7 +40,8 @@ class PreviewDialog(QDialog):
         head.addLayout(col, 1)
         self.filter = Segmented([("all", "全部"), ("attention", "需要注意"), ("masked", "已打码")])
         self.filter.setFixedWidth(300)
-        self.filter.set_value("all")
+        has_att = any(d.status() == "attention" for d in mw.docs)
+        self.filter.set_value("attention" if has_att else "all")
         self.filter.changed.connect(lambda _k: self._fill())
         head.addWidget(self.filter, 0, Qt.AlignmentFlag.AlignBottom)
         v.addLayout(head)
@@ -59,10 +60,10 @@ class PreviewDialog(QDialog):
         v.addWidget(self.grid, 1)
 
         foot = QHBoxLayout()
-        foot.addWidget(muted("双击任意一张进入编辑，手动调整码的位置和大小。「需要注意」是 AI 没有找到部位的图片。"), 1)
+        foot.addWidget(muted("双击任意一张进入编辑，手动调整码的位置和大小。「需要注意」是 AI 没检出部位、或者把握不大的图片，其余的可以直接保存。"), 1)
         b_close = button("关闭")
         b_close.clicked.connect(self.reject)
-        b_review = button("逐张审核")
+        b_review = button("逐张看需要注意的")
         b_review.clicked.connect(self._review)
         self.b_save = button("保存全部", "Primary")
         self.b_save.setMinimumWidth(140)
@@ -79,11 +80,11 @@ class PreviewDialog(QDialog):
         pal = theme.current()
         self.grid.clear()
         n_mask = sum(1 for d in mw.docs if d.layers)
-        n_none = sum(1 for d in mw.docs if d.status() in ("none", "todo", "error"))
+        n_none = sum(1 for d in mw.docs if d.status() in ("attention", "error"))
         self.summary.setText(f"共 {len(mw.docs)} 张　·　已打码 {n_mask} 张　·　需要注意 {n_none} 张")
         for i, d in enumerate(mw.docs):
             st = d.status()
-            if mode == "attention" and st not in ("none", "todo", "error"):
+            if mode == "attention" and st not in ("attention", "error"):
                 continue
             if mode == "masked" and not d.layers:
                 continue
@@ -104,7 +105,7 @@ class PreviewDialog(QDialog):
 
     def _review(self):
         for i, d in enumerate(self.mw.docs):
-            if d.status() in ("none", "done", "todo"):
+            if d.status() == "attention":
                 self.picked = i
                 break
         else:
