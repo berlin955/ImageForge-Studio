@@ -12,8 +12,8 @@ import numpy as np
 SIZE = 512
 
 
-MODEL_SHA256 = ""      # 模型上传后填上
-MODEL_SIZE = 0
+MODEL_SHA256 = "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6"
+MODEL_SIZE = 208044816
 
 
 def model_url() -> str:
