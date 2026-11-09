@@ -1,0 +1,66 @@
+name: fonts
+
+# 生成「字体包」：免费开源 / 免费商用字体，精简到常用汉字 + 英文 + 标点，放到 models-v1 里，软件第一次改字时下载
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 下载字体
+        run: |
+          pip install --quiet fonttools brotli
+          mkdir -p src out
+          gh release download -R adobe-fonts/source-han-sans -p "SourceHanSansSC.zip" -D src || true
+          gh release download -R adobe-fonts/source-han-serif -p "09_SourceHanSerifSC.zip" -D src || true
+          try() { echo "== $1"; curl -fL --retry 2 -o "$2" "$1" && ls -la "$2" || { echo "FAIL $1"; rm -f "$2"; }; }
+          # 阿里巴巴普惠体 3.0（免费商用）
+          try https://puhuiti.oss-cn-hangzhou.aliyuncs.com/AlibabaPuHuiTi-3/AlibabaPuHuiTi-3.zip src/puhuiti3.zip
+          try https://puhuiti.oss-cn-hangzhou.aliyuncs.com/AlibabaPuHuiTi-2/AlibabaPuHuiTi-2.zip src/puhuiti2.zip
+          # 阿里妈妈字体（免费商用）
+          for n in AlimamaShuHeiTi AlimamaFangYuanTiVF AlimamaDongFangDaKai AlimamaDaoLiTi AlimamaAgileVF; do
+            try https://puhuiti.oss-cn-hangzhou.aliyuncs.com/AlimamaFonts/$n.zip src/$n.zip
+          done
+          cd src && for z in *.zip; do unzip -oq "$z" -d "${z%.zip}" || true; done && cd ..
+          find src -iname "*.otf" -o -iname "*.ttf" | grep -v -i "HW\|/__MACOSX" | sort > list.txt
+          cat list.txt
+      - name: 精简（GB2312 常用汉字 + 英文 + 标点）
+        run: |
+          python - <<'PY'
+          import os, subprocess
+          chars = set()
+          for b1 in range(0xB0, 0xF8):
+              for b2 in range(0xA1, 0xFF):
+                  try:
+                      chars.add(bytes([b1, b2]).decode("gb2312"))
+                  except Exception:
+                      pass
+          extra = "".join(chr(c) for c in range(0x20, 0x7F)) + "，。、；：？！“”‘’（）【】《》〈〉「」『』…—～·￥％＋－×÷＝＜＞｛｝｜＃＠＆＊°℃①②③④⑤⑥⑦⑧⑨⑩★☆●○◆◇■□▲△♡♥√✓✔※→←↑↓"
+          chars |= set(extra)
+          chars |= {chr(c) for c in range(0xFF01, 0xFF5F)}
+          open("chars.txt", "w", encoding="utf-8").write("".join(sorted(chars)))
+          print("chars", len(chars))
+          for line in open("list.txt", encoding="utf-8"):
+              src = line.strip()
+              if not src:
+                  continue
+              name = os.path.splitext(os.path.basename(src))[0]
+              dst = f"out/{name}.otf" if src.lower().endswith(".otf") else f"out/{name}.ttf"
+              r = subprocess.run(["pyftsubset", src, "--text-file=chars.txt", f"--output-file={dst}",
+                                  "--layout-features=*", "--name-IDs=*", "--name-languages=*", "--no-hinting"],
+                                 capture_output=True, text=True)
+              print(name, os.path.getsize(dst) if os.path.exists(dst) else r.stderr[-200:])
+          PY
+          ls -la out && du -sh out
+          cd out && zip -q ../fonts.zip * && cd .. && ls -la fonts.zip && sha256sum fonts.zip
+      - name: 上传
+        run: gh release upload models-v1 fonts.zip -R ${{ github.repository }} --clobber
