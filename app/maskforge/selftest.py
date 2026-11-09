@@ -380,7 +380,7 @@ def run_selftest(log_path: str | None = None) -> int:
         blocks_ = [(260, 1160), (1400, 2300), (2560, 3460)]
         for y0, y1 in blocks_:
             noise = rng.integers(40, 200, (y1 - y0, 900, 3), dtype=_np.uint8)
-            arr[y0:y1, 50:950] = cv2.GaussianBlur(noise, (5, 5), 0)
+            arr[y0:y1, 50:950] = noise   # 测试用的「照片」：纹理丰富的区块
         cv2.putText(arr, "NEW ARRIVAL", (250, 170), cv2.FONT_HERSHEY_SIMPLEX, 2.2, (40, 40, 40), 5, cv2.LINE_AA)
         cv2.putText(arr, "SOFT COTTON 95", (240, 3700), cv2.FONT_HERSHEY_SIMPLEX, 1.8, (40, 40, 40), 4, cv2.LINE_AA)
         det_src = tmp / "详情模板.png"
