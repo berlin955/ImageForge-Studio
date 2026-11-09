@@ -77,15 +77,30 @@ class Detector:
         return o
 
     def detect(self, image: QImage, threshold: float = 0.25, flip_tta: bool = True) -> list[dict]:
-        S = self.size
         w, h = image.width(), image.height()
         if w <= 0 or h <= 0:
             return []
-        scale = S / max(w, h)
+        scale = self.size / max(w, h)
         nw, nh = max(1, round(w * scale)), max(1, round(h * scale))
         small = image.scaled(nw, nh, Qt.AspectRatioMode.IgnoreAspectRatio,
                              Qt.TransformationMode.SmoothTransformation)
-        rgb = qimage_to_rgb(small)
+        return self._detect_small(qimage_to_rgb(small), w, h, threshold, flip_tta)
+
+    def detect_rgb(self, rgb: np.ndarray, threshold: float = 0.25, flip_tta: bool = True) -> list[dict]:
+        """和 detect 一样，但直接用 numpy 图（不碰 Qt，适合在后台线程里用）。"""
+        import cv2
+        h, w = rgb.shape[:2]
+        if w <= 0 or h <= 0:
+            return []
+        scale = self.size / max(w, h)
+        nw, nh = max(1, round(w * scale)), max(1, round(h * scale))
+        small = cv2.resize(rgb, (nw, nh), interpolation=cv2.INTER_AREA)
+        return self._detect_small(small, w, h, threshold, flip_tta)
+
+    def _detect_small(self, rgb: np.ndarray, w: int, h: int, threshold: float, flip_tta: bool) -> list[dict]:
+        S = self.size
+        nh, nw = rgb.shape[:2]
+        scale = S / max(w, h)
         canvas = np.zeros((S, S, 3), np.float32)
         px, py = (S - nw) // 2, (S - nh) // 2
         canvas[py:py + nh, px:px + nw] = rgb.astype(np.float32) / 255.0

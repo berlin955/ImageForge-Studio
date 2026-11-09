@@ -135,36 +135,51 @@ def find_slots(rgb: np.ndarray, dets: list[dict], blocks: bool = False, text_box
     2. 识别到模特、但不在上面这些框里的：从模特往外找照片的直边；
     3. 详情长图：再补上没有模特的照片块（面料特写等）。
     text_boxes：识别到的文字框 (x1, y1, x2, y2)，主要是文字的区域不当作照片。"""
-    from .photo_regions import find_regions
+    from .photo_regions import SENSITIVE, STRICT, find_regions
     H, W = rgb.shape[:2]
-    people = _cluster_people(dets, W, H)
+    parts = [d["box"] for d in dets
+             if (d["box"][2] - d["box"][0]) * (d["box"][3] - d["box"][1]) > W * H * 0.0008]
     slots: list[dict] = []
 
     def rect_of(s):
         return (s["x"], s["y"], s["x"] + s["w"], s["y"] + s["h"])
 
-    def has_person(r):
-        return any(r[0] <= (p[0] + p[2]) / 2 <= r[2] and r[1] <= (p[1] + p[3]) / 2 <= r[3] for p in people)
+    def center_in(b, r):
+        cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+        return r[0] <= cx <= r[2] and r[1] <= cy <= r[3]
 
-    try:
-        regions = find_regions(rgb)
-    except Exception:
-        regions = []
-    for reg in sorted(regions, key=lambda g: g["w"] * g["h"], reverse=True):
-        r = rect_of(reg)
-        person = has_person(r)
-        if not person:
-            if not reg["photo"]:
+    def uncovered():
+        return [b for b in parts if not any(center_in(b, rect_of(s)) for s in slots)]
+
+    def take_regions(level, only_people: bool):
+        try:
+            regions = find_regions(rgb, level=level)
+        except Exception:
+            return
+        for reg in sorted(regions, key=lambda g: g["w"] * g["h"], reverse=True):
+            r = rect_of(reg)
+            person = any(center_in(b, r) for b in parts)
+            if only_people and not any(center_in(b, r) for b in uncovered()):
                 continue
-            if max(reg["w"] / max(1, reg["h"]), reg["h"] / max(1, reg["w"])) > 4:
-                continue      # 细长条多半是装饰条、标题底框
-            txt = sum(_overlap(r, t) for t in text_boxes)
-            if txt > 0.08 * _area(r):
-                continue      # 主要是文字（标题框、尺码表）
-        if any(_overlap(r, rect_of(s)) > 0.5 * min(_area(r), _area(rect_of(s))) for s in slots):
-            continue
-        slots.append({"x": reg["x"], "y": reg["y"], "w": reg["w"], "h": reg["h"],
-                      "shape": reg["shape"], "radius": reg["radius"]})
+            if not person:
+                if not reg["photo"]:
+                    continue
+                if max(reg["w"] / max(1, reg["h"]), reg["h"] / max(1, reg["w"])) > 4:
+                    continue      # 细长条多半是装饰条、标题底框
+                txt = sum(_overlap(r, t) for t in text_boxes)
+                if txt > 0.08 * _area(r):
+                    continue      # 主要是文字（标题框、尺码表）
+            if _area(r) > 0.9 * W * H and len(parts) and len(_cluster_people(dets, W, H)) > 1:
+                continue          # 一整张图都被当成一块，说明边没找准
+            if any(_overlap(r, rect_of(s)) > 0.5 * min(_area(r), _area(rect_of(s))) for s in slots):
+                continue
+            slots.append({"x": reg["x"], "y": reg["y"], "w": reg["w"], "h": reg["h"],
+                          "shape": reg["shape"], "radius": reg["radius"]})
+
+    take_regions(STRICT, only_people=False)
+    if uncovered():
+        take_regions(SENSITIVE, only_people=True)
+    people = _cluster_people([{"box": b} for b in uncovered()], W, H)
 
     # 模特不在上面的照片框里：从模特往外扩，找照片的直边
     k = min(1.0, 900 / W)   # 按宽度缩小；长图不能按长边缩，否则会缩得太小
@@ -181,8 +196,23 @@ def find_slots(rgb: np.ndarray, dets: list[dict], blocks: bool = False, text_box
             continue
         x1, y1, x2, y2 = expand_to_frame(gray, [v * k for v in p])
         r = (x1 / k, y1 / k, x2 / k, y2 / k)
-        # 扩出去的范围压到了别的照片，说明没找准边：退回到模特周围一圈
-        if any(_overlap(r, rect_of(s)) > 0.15 * _area(rect_of(s)) for s in slots):
+        # 扩出去压到了别的照片：从那张照片的边切开，留下模特这一侧
+        for s in slots:
+            o = rect_of(s)
+            if _overlap(r, o) <= 0:
+                continue
+            cuts = []
+            if cx >= o[2]:
+                cuts.append((o[2], r[1], r[2], r[3]))
+            if cx <= o[0]:
+                cuts.append((r[0], r[1], o[0], r[3]))
+            if cy >= o[3]:
+                cuts.append((r[0], o[3], r[2], r[3]))
+            if cy <= o[1]:
+                cuts.append((r[0], r[1], r[2], o[1]))
+            if cuts:
+                r = max(cuts, key=_area)
+        if _area(r) < _area(p) * 0.5:
             mx, my = (p[2] - p[0]) * 0.08, (p[3] - p[1]) * 0.05
             r = (max(0, p[0] - mx), max(0, p[1] - my), min(W, p[2] + mx), min(H, p[3] + my))
         slots.append({"x": r[0], "y": r[1], "w": r[2] - r[0], "h": r[3] - r[1], "shape": "rect", "radius": 0.0})
@@ -288,21 +318,20 @@ def ocr_tiled(rgb: np.ndarray) -> list:
     return out
 
 
-def detect_tiled(detector, img: QImage, threshold: float = 0.2) -> list[dict]:
+def detect_tiled(detector, rgb: np.ndarray, threshold: float = 0.2) -> list[dict]:
     """人物识别。长图分段识别，否则人太小认不出来。"""
     if detector is None:
         return []
-    W, H = img.width(), img.height()
+    H, W = rgb.shape[:2]
     if H <= 1.6 * W:
-        return detector.detect(img, threshold)
+        return detector.detect_rgb(rgb, threshold)
     T = int(W * 1.25)
     step = int(T * 0.75)
     dets = []
     y = 0
     while True:
         h = min(T, H - y)
-        tile = img.copy(0, y, W, h)
-        for d in detector.detect(tile, threshold):
+        for d in detector.detect_rgb(rgb[y:y + h], threshold):
             x1, y1, x2, y2 = d["box"]
             dets.append({**d, "box": (x1, y1 + y, x2, y2 + y)})
         if y + h >= H:
@@ -396,15 +425,20 @@ def rgb_to_qimage(rgb: np.ndarray) -> QImage:
 # ================================================================ 生成 / 保存模板
 def build_template(path: str, detector, name: str = "", kind: str = "spec", progress=None) -> dict:
     """分析一张规格图，生成模板并保存，返回模板数据。"""
-    from .model import load_qimage
-    img = load_qimage(path)
-    if img is None:
+    # 这一步在后台线程里跑，全程只用 numpy / OpenCV，不碰 Qt 的图片对象
+    import cv2
+    try:
+        data = np.fromfile(str(path), np.uint8)
+        bgr = cv2.imdecode(data, cv2.IMREAD_COLOR)
+    except Exception:
+        bgr = None
+    if bgr is None:
         raise ValueError("读取不了这张图片")
-    rgb = qimage_to_rgb(img)
+    rgb = np.ascontiguousarray(bgr[:, :, ::-1])
     H, W = rgb.shape[:2]
     say = progress or (lambda _m: None)
     say("正在识别模特")
-    dets = detect_tiled(detector, img, 0.2)
+    dets = detect_tiled(detector, rgb, 0.2)
     say("正在识别文字")
     ocr = run_ocr(rgb)
     boxes = []
@@ -419,8 +453,11 @@ def build_template(path: str, detector, name: str = "", kind: str = "spec", prog
     tid = uuid.uuid4().hex[:10]
     folder = templates_dir() / tid
     folder.mkdir(parents=True, exist_ok=True)
-    rgb_to_qimage(clean).save(str(folder / "bg.png"), "PNG")
-    img.save(str(folder / "original.png"), "PNG")
+    for name_, arr in (("bg.png", clean), ("original.png", rgb)):
+        ok, buf = cv2.imencode(".png", np.ascontiguousarray(arr[:, :, ::-1]))
+        if not ok:
+            raise IOError("保存模板图片失败")
+        buf.tofile(str(folder / name_))
     roles = ["正面", "背面"] + [f"图片{i}" for i in range(3, 100)] if kind == "spec" \
         else [f"图片{i}" for i in range(1, 200)]
     for i, s in enumerate(slots):
@@ -429,7 +466,9 @@ def build_template(path: str, detector, name: str = "", kind: str = "spec", prog
         s.setdefault("shape", "rect")
         s.setdefault("radius", 0.0)
     tpl = {"id": tid, "kind": kind, "name": name or Path(path).stem, "w": W, "h": H,
-           "slots": slots, "texts": texts}
+           "slots": slots, "texts": texts,
+           "ocr_error": (last_error.strip().splitlines() or [""])[-1][:300] if last_error else "",
+           "ocr_raw": len(ocr)}
     save_template(tpl)
     return tpl
 

@@ -1045,7 +1045,13 @@ class TemplatePage(QWidget):
             self.text_lay.addWidget(e)
             self.text_edits[t["id"]] = e
         if not self.tpl["texts"]:
-            self.text_lay.addWidget(muted("没有识别到文字，可以点「添加文字」。"))
+            err = (self.tpl or {}).get("ocr_error")
+            if err:
+                lbl = muted(f"文字识别出错了：{err}\n\n可以先点「添加文字」手动加；把这行错误发给作者能更快修好。")
+                lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                self.text_lay.addWidget(lbl)
+            else:
+                self.text_lay.addWidget(muted("没有识别到文字，可以点「添加文字」。"))
 
     def eventFilter(self, obj, ev):
         from PySide6.QtCore import QEvent

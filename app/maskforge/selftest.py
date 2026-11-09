@@ -425,6 +425,38 @@ def run_selftest(log_path: str | None = None) -> int:
         assert not sp.scanning, "导入动画没有结束"
         assert sp.tpl and len(sp.tpl["slots"]) == 2 and len(load_templates("spec")) == n_before + 1, sp.tpl
         log(f"scan animation ok: {frames} frames, {_time.monotonic() - t_start:.1f}s")
+        # ---- 中文文字识别（仿真实规格图：米色底、深色标题框、胶囊相框）----
+        import os as _os
+        font_file = next((f for f in (r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simsun.ttc",
+                                      r"C:\Windows\Fonts\simhei.ttf") if _os.path.exists(f)), None)
+        if font_file:
+            from PIL import Image as _PI, ImageDraw as _PD, ImageFont as _PF
+            zh = _np.full((800, 800, 3), (233, 218, 203), _np.uint8)
+            zh[:, :430] = _rng.integers(30, 220, (800, 430, 3), dtype=_np.uint8)
+            cap = _np.zeros((800, 800), _np.uint8)
+            cv2.rectangle(cap, (480, 380), (780, 560), 1, -1)
+            cv2.circle(cap, (630, 380), 150, 1, -1)
+            cv2.circle(cap, (630, 560), 150, 1, -1)
+            tex = _rng.integers(30, 220, (800, 800, 3), dtype=_np.uint8)
+            zh[cap > 0] = tex[cap > 0]
+            ring = cv2.dilate(cap, _np.ones((5, 5), _np.uint8)) - cap
+            zh[ring > 0] = (230, 190, 160)
+            pim = _PI.fromarray(zh)
+            dr = _PD.Draw(pim)
+            dr.rounded_rectangle((470, 60, 790, 120), 30, fill=(74, 52, 40))
+            dr.text((520, 66), "7114 黑色", font=_PF.truetype(font_file, 40), fill=(255, 255, 255))
+            dr.text((520, 150), "{含：单件露臀内裤}", font=_PF.truetype(font_file, 24), fill=(90, 70, 60))
+            dr.text((500, 740), "建议体重：80-115斤", font=_PF.truetype(font_file, 24), fill=(90, 70, 60))
+            zh_src = tmp / "中文规格.png"
+            pim.save(str(zh_src))
+            ztpl = build_template(str(zh_src), mw.get_detector(), "中文规格")
+            zt = " | ".join(t["text"] for t in ztpl["texts"])
+            log(f"zh ocr: {zt} (raw {ztpl.get('ocr_raw')}, err {ztpl.get('ocr_error')!r})")
+            log(f"zh slots: {[(int(s['x']), int(s['y']), int(s['w']), int(s['h']), s.get('radius')) for s in ztpl['slots']]}")
+            assert "7114" in zt and "体重" in zt, f"中文没有识别出来：{zt}"
+            assert len(ztpl["slots"]) == 2, ztpl["slots"]
+        else:
+            log("zh ocr skipped: no font")
         # ---- 智能详情：长图模板（分段照片 + 文字），按宽度导出并切片 ----
         rng = _np.random.default_rng(7)
         H_ = 4200

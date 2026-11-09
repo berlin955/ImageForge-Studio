@@ -33,15 +33,15 @@ def background_color(sm: np.ndarray) -> np.ndarray:
     return border[keys == top].mean(0)
 
 
-def edge_map(sm: np.ndarray) -> np.ndarray:
+def edge_map(sm: np.ndarray, lo: int = 25, hi: int = 60, close: int = 5) -> np.ndarray:
     """边缘图（亮度和颜色的边都算），已经连成线；四周补的一圈全部当作边。"""
     import cv2
     pad = cv2.copyMakeBorder(sm, PAD, PAD, PAD, PAD, cv2.BORDER_REPLICATE)
     lab = cv2.cvtColor(np.ascontiguousarray(pad), cv2.COLOR_RGB2LAB)
     e = np.zeros(pad.shape[:2], np.uint8)
     for c in range(3):
-        e |= cv2.Canny(cv2.GaussianBlur(lab[:, :, c], (3, 3), 0), 25, 60)
-    e = cv2.morphologyEx(e, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+        e |= cv2.Canny(cv2.GaussianBlur(lab[:, :, c], (3, 3), 0), lo, hi)
+    e = cv2.morphologyEx(e, cv2.MORPH_CLOSE, np.ones((close, close), np.uint8))
     e[:PAD, :] = 255
     e[-PAD:, :] = 255
     e[:, :PAD] = 255
@@ -123,13 +123,18 @@ def fit_shape(reg: np.ndarray):
     return float(x0), float(y0), float(w), float(h), best[1], float(best[2]), float(best[0])
 
 
-def find_regions(rgb: np.ndarray, min_area: float = 0.025, min_colors: int = 30) -> list[dict]:
+# 先用标准灵敏度找；照片和底色分得不够清楚时，用更灵敏的一档再找一次
+STRICT = (25, 60, 5)
+SENSITIVE = (12, 32, 9)
+
+
+def find_regions(rgb: np.ndarray, min_area: float = 0.025, min_colors: int = 30, level=STRICT) -> list[dict]:
     """返回照片区域列表（原图坐标）：{x, y, w, h, shape, radius, colors, fit, photo}。"""
     import cv2
     H, W = rgb.shape[:2]
     sm, k = _small(rgb)
     h, w = sm.shape[:2]
-    e = edge_map(sm)
+    e = edge_map(sm, *level)
     enclosed = (~outside_mask(sm, e)).astype(np.uint8)
     enclosed = cv2.morphologyEx(enclosed, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
     enclosed = enclosed[PAD:-PAD, PAD:-PAD]
