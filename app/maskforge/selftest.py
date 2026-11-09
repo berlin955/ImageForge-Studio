@@ -211,7 +211,7 @@ def run_selftest(log_path: str | None = None) -> int:
         assert pv is not None and pv.width() == 300, "预览图失败"
         mw._flush_thumbs()
         pd = PreviewDialog(mw)
-        assert pd.grid.count() == 1, pd.grid.count()
+        assert pd.grid.count() == len(mw.docs), (pd.grid.count(), len(mw.docs))
         pd.close()
         mw.upload_stickers  # 存在
         sid = lib.add(str(src))
