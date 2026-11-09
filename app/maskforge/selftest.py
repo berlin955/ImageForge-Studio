@@ -246,6 +246,14 @@ def run_selftest(log_path: str | None = None) -> int:
         for key in mw.page_keys:
             mw.show_page(key)
             app.processEvents()
+        # 打开批量主图页会在后台识别人物位置，等它做完
+        for _ in range(300):
+            if not mw.busy:
+                break
+            QTest.qWait(100)
+        assert not mw.busy, "后台识别人物位置没有结束"
+        assert all(d.subject is not None for d in mw.docs), "没有识别出人物位置"
+        log("subject analysis ok")
         mw.show_page("assets")
         mw.assets_page.refresh()
         assert mw.assets_page.grid.count() == len(mw.docs), "素材页图片数量不对"
