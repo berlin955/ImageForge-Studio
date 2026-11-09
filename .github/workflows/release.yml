@@ -155,5 +155,16 @@ jobs:
         run: |
           python tools/release_notes.py $env:APP_VERSION notes.md dist-installer
           python tools/latest_json.py $env:APP_VERSION notes.md dist-installer
-          gh release create "v$env:APP_VERSION" (Get-ChildItem dist-installer\*).FullName `
-            --target "${{ github.sha }}" --title "智能打码工坊 v$env:APP_VERSION" --notes-file notes.md
+          $files = (Get-ChildItem dist-installer\*).FullName
+          $tag = "v$env:APP_VERSION"
+          $done = $false
+          for ($i = 1; $i -le 4 -and -not $done; $i++) {
+            gh release view $tag *> $null
+            if ($LASTEXITCODE -eq 0) {
+              gh release upload $tag $files --clobber
+            } else {
+              gh release create $tag $files --target "${{ github.sha }}" --title "智能打码工坊 v$env:APP_VERSION" --notes-file notes.md
+            }
+            if ($LASTEXITCODE -eq 0) { $done = $true } else { Write-Host "release attempt $i failed, retrying"; Start-Sleep -Seconds (15 * $i) }
+          }
+          if (-not $done) { exit 1 }
