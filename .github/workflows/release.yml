@@ -64,6 +64,28 @@ jobs:
           python tools/fetch_model.py
           python tools/make_icon.py
 
+      - name: 下载高精度识别模型（640m）
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ok = $false
+          try {
+            gh release download v3.4-weights -R notAI-tech/NudeNet -p 640m.onnx -D models --clobber
+            if ((Test-Path models\640m.onnx) -and (Get-Item models\640m.onnx).Length -gt 5MB) { $ok = $true }
+          } catch { Write-Host "gh download failed: $_" }
+          if (-not $ok) {
+            foreach ($u in @("https://github.com/notAI-tech/NudeNet/releases/download/v3.4-weights/640m.onnx",
+                             "https://huggingface.co/alexgenovese/checkpoint/resolve/main/640m.onnx")) {
+              try {
+                Invoke-WebRequest $u -OutFile models\640m.onnx -MaximumRedirection 10
+                if ((Get-Item models\640m.onnx).Length -gt 5MB) { $ok = $true; break }
+              } catch { Write-Host "download failed: $u $_" }
+            }
+          }
+          if ($ok) { Write-Host ("640m model: " + (Get-Item models\640m.onnx).Length + " bytes") }
+          else { Remove-Item models\640m.onnx -ErrorAction SilentlyContinue; Write-Host "::warning::640m model not available, using 320n" }
+
       - name: 自检（源码）
         env:
           QT_QPA_PLATFORM: offscreen
