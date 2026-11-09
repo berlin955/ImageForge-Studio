@@ -107,6 +107,7 @@ class ImageDoc:
         self.crop: dict | None = None        # 手动调整过的主图框 {cx, cy, scale}，按比例记录
         self.logo_pos: tuple | None = None   # 主图角标手动拖过的位置（按输出比例）
         self.icon = None                     # 缩略图图标（带码），各页面共用
+        self.labels: list | None = None      # AI 识别到的部位标签，用来判断正面 / 背面
         self.error = ""
         self.hist: list[list[dict]] = []
         self.fut: list[list[dict]] = []

@@ -299,6 +299,68 @@ def run_selftest(log_path: str | None = None) -> int:
         back = QImage(str(files[-1]))
         assert back.width() == 800 or back.width() == mc["size"], back.width()
         log(f"main image ok: {len(files)} files")
+        # ---- 智能规格：生成模板（文字识别 + 擦字）、填图、改字、导出 ----
+        from PySide6.QtGui import QFont
+        from .spec_engine import build_template, find_slots, load_templates
+        tpl_src = tmp / "规格模板.png"
+        tim = QImage(1000, 1000, QImage.Format.Format_RGB32)
+        tim.fill(QColor("#e8e8ea"))
+        tp = QPainter(tim)
+        tp.fillRect(0, 0, 480, 1000, QColor("#806050"))
+        tp.fillRect(540, 280, 380, 560, QColor("#ffffff"))
+        tp.fillRect(560, 300, 340, 520, QColor("#a07060"))
+        tp.fillRect(560, 60, 400, 120, QColor("#111111"))
+        f = QFont("Arial")
+        f.setPixelSize(72)
+        f.setBold(True)
+        tp.setFont(f)
+        tp.setPen(QColor("#ffffff"))
+        tp.drawText(590, 150, "6757 WHITE")
+        f.setPixelSize(44)
+        f.setBold(False)
+        tp.setFont(f)
+        tp.setPen(QColor("#333333"))
+        tp.drawText(600, 920, "SIZE 80-125")
+        tp.end()
+        assert tim.save(str(tpl_src))
+        tpl = build_template(str(tpl_src), None, "测试规格")
+        texts = " | ".join(t["text"] for t in tpl["texts"])
+        log(f"spec ocr: {texts}")
+        assert any("6757" in t["text"] for t in tpl["texts"]), f"没有识别出文字：{texts}"
+        from .spec_engine import template_bg
+        bgimg = template_bg(tpl)
+        t0 = next(t for t in tpl["texts"] if "6757" in t["text"])
+        # 原来白字的位置应该被擦成接近黑色底
+        cx, cy = int(t0["x"] + t0["w"] * 0.3), int(t0["y"] + t0["h"] * 0.5)
+        assert bgimg.pixelColor(cx, cy).lightness() < 90, f"文字没有擦干净：{bgimg.pixelColor(cx, cy).name()}"
+        log(f"spec text erased ok: color={t0['color']} size={t0['size']:.0f}")
+        assert load_templates("spec") and load_templates("spec")[0]["id"] == tpl["id"]
+        sp = mw.spec_page
+        mw.show_page("spec")
+        sp.reload_templates(select=tpl["id"])
+        app.processEvents()
+        sp.set_edit_mode(True)
+        from PySide6.QtCore import QRectF as _R
+        sp.add_slot(_R(0, 0, 480, 1000))
+        sp.add_slot(_R(560, 300, 340, 520))
+        sp.set_edit_mode(False)
+        assert len(sp.tpl["slots"]) == 2
+        for d in mw.docs:
+            d.labels = None
+        mw.docs[0].labels, mw.docs[1].labels = ["FACE_FEMALE"], ["BUTTOCKS_EXPOSED"]
+        sp.auto_fill()
+        roles = {s["role"]: sp.fills.get(s["id"], {}).get("doc") for s in sp.tpl["slots"]}
+        assert roles.get("正面") == mw.docs[0].id and roles.get("背面") == mw.docs[1].id, roles
+        t_edit = next(iter(sp.text_edits.values()))
+        t_edit.setText("7039 粉色")
+        t_edit.textEdited.emit("7039 粉色")
+        sp.save_current_template()
+        out_img = sp.render_output()
+        assert out_img.width() == 1000 and out_img.height() == 1000
+        sp.name_edit.setText("测试规格图")
+        path = sp.export_current()
+        assert path and Path(path).exists(), path
+        log(f"spec export ok: {Path(path).name}")
         mw.show_page("mask")
         from .settings import SettingsDialog
         dlg = SettingsDialog(mw)

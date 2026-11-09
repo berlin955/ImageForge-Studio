@@ -166,20 +166,22 @@ class MainPreview(QWidget):
         self.img: QImage | None = None
         self.cells = []
         self.logo_rect: QRectF | None = None
-        self.S = 800
+        self.S = 800          # 预览画的尺寸
+        self.real = 800       # 实际导出的尺寸
         self._drag = None
         self._hover = -1
         self.setMouseTracking(True)
         self.setMinimumSize(360, 360)
 
-    def set_result(self, img, cells, logo_rect, S):
+    def set_result(self, img, cells, logo_rect, S, real=None):
         self.img, self.cells, self.logo_rect, self.S = img, cells, logo_rect, S
+        self.real = real or S
         self.update()
 
     def _frame(self) -> QRectF:
-        m = 24
-        side = max(10, min(self.width(), self.height()) - 2 * m)
-        return QRectF((self.width() - side) / 2, (self.height() - side) / 2, side, side)
+        m, bottom = 20, 46   # 下方留出两行说明文字的位置
+        side = max(10, min(self.width() - 2 * m, self.height() - m - bottom))
+        return QRectF((self.width() - side) / 2, m, side, side)
 
     def _to_out(self, pos) -> QPointF:
         f = self._frame()
@@ -210,9 +212,12 @@ class MainPreview(QWidget):
             pen.setStyle(Qt.PenStyle.DashLine)
             p.setPen(pen)
             p.drawRect(QRectF(f.x() + r.x() * k, f.y() + r.y() * k, r.width() * k, r.height() * k))
+        p.setPen(QColor(pal["fg"]))
+        p.drawText(QRectF(0, f.bottom() + 4, self.width(), 18), Qt.AlignmentFlag.AlignCenter,
+                   f"导出尺寸 {self.real}×{self.real}")
         p.setPen(QColor(pal["muted"]))
-        p.drawText(QRectF(f.x(), f.bottom() + 2, f.width(), 20), Qt.AlignmentFlag.AlignCenter,
-                   f"{self.S}×{self.S}　拖动调整位置 · 滚轮缩放 · 双击恢复自动")
+        p.drawText(QRectF(0, f.bottom() + 22, self.width(), 18), Qt.AlignmentFlag.AlignCenter,
+                   "拖动调位置 · 滚轮缩放 · 双击复原")
 
     def _cell_at(self, o: QPointF) -> int:
         for i, c in enumerate(self.cells):
@@ -809,7 +814,7 @@ class MainImagePage(QWidget):
             self.preview.set_result(None, [], None, S)
             return
         img, cells, lr = compose(self.mc, items, logo, self.mw.library, PS, preview=True)
-        self.preview.set_result(img, cells, lr, PS)
+        self.preview.set_result(img, cells, lr, PS, S)
 
     # ---------------------------------------------------------------- 导出
     def _out_dir(self) -> Path | None:

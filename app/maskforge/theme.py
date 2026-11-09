@@ -72,6 +72,7 @@ QWidget { color: $fg; }
 QMainWindow, QDialog, #Workspace { background: $bg; }
 #TopBar { background: $side; border-bottom: 1px solid $line; }
 #NavRail { background: $bg; border-right: 1px solid $line; }
+QFrame#NavLine { background: $line; border: none; }
 QLabel#NavBrand { font-size: 12px; font-weight: 700; color: $fg; }
 QToolButton#NavBtn { background: transparent; border: 1px solid transparent; border-radius: 12px;
                      padding: 8px 2px 7px 2px; color: $muted; font-size: 12px; font-weight: 600; }

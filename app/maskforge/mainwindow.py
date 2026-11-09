@@ -251,18 +251,20 @@ class MainWindow(QMainWindow):
 
     # ---- 外壳：左侧功能栏 + 各功能页 ----
     NAV = [
-        ("assets", "▦", "素材"),
         ("mask", "◐", "智能打码"),
         ("main", "▣", "批量主图"),
         ("spec", "▤", "智能规格"),
         ("detail", "☰", "智能详情"),
         ("watermark", "◎", "批量水印"),
+        None,                       # 分隔线：下面是资料
+        ("assets", "▦", "素材"),
         ("templates", "❖", "模板库"),
     ]
 
     def _build_shell(self):
         from .pages import AssetsPage, ComingSoonPage
         from .mainimage import MainImagePage
+        from .spec import SpecPage
         central = QWidget()
         h = QHBoxLayout(central)
         h.setContentsMargins(0, 0, 0, 0)
@@ -291,15 +293,26 @@ class MainWindow(QMainWindow):
         self.nav_btns = {}
         self.assets_page = AssetsPage(self)
         self.main_page = MainImagePage(self)
-        built = {"assets": self.assets_page, "mask": self.mask_page, "main": self.main_page}
+        self.spec_page = SpecPage(self)
+        built = {"assets": self.assets_page, "mask": self.mask_page, "main": self.main_page,
+                 "spec": self.spec_page}
         soon = {
             "spec": ("智能规格", "导入一张喜欢的规格图，自动挖空原来的模特照片、识别文字，换成你的模特图，文字可以随时修改。"),
             "detail": ("智能详情", "和智能规格一样换模特、改文字，支持很长的详情图，导出时可以自动切成几段。"),
             "watermark": ("批量水印", "给打码图、主图、规格图、详情图批量加上你的 Logo，透明度、位置、大小可调，每张还能单独挪位置。"),
             "templates": ("模板库", "保存好的规格、详情、主图模板都在这里，下次新款直接套用。"),
         }
-        for key, _glyph, text in self.NAV:
-            b = self._nav_button(text, "mask" if key == "mask" else key)
+        for entry in self.NAV:
+            if entry is None:
+                line = QFrame()
+                line.setObjectName("NavLine")
+                line.setFixedHeight(1)
+                nv.addSpacing(6)
+                nv.addWidget(line)
+                nv.addSpacing(6)
+                continue
+            key, _glyph, text = entry
+            b = self._nav_button(text, key)
             b.setCheckable(True)
             b.clicked.connect(lambda _=False, k=key: self.show_page(k))
             self.nav_group.addButton(b)
@@ -324,7 +337,7 @@ class MainWindow(QMainWindow):
         h.addWidget(nav)
         h.addWidget(self.pages, 1)
         self.setCentralWidget(central)
-        self.show_page("assets")
+        self.show_page("mask")
 
     def _nav_button(self, text: str, icon: str):
         from PySide6.QtWidgets import QToolButton
@@ -497,6 +510,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "assets_page"):
             self.assets_page.update_icon(d)
             self.main_page.update_icon(d)
+            self.spec_page.update_icon(d)
 
     def mark_thumb_dirty(self, d: ImageDoc | None = None):
         d = d or self.cur_doc()
@@ -658,6 +672,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "assets_page"):
             self.assets_page.refresh()
             self.main_page.refresh()
+            self.spec_page.refresh()
 
     def _update_steps(self):
         n = len(self.docs)
@@ -847,11 +862,12 @@ class MainWindow(QMainWindow):
         self._worker = w
         w.start()
 
-    def analyze_subjects(self, then=None):
-        """只识别人物位置（给主图智能裁切用），不打码。"""
+    def analyze_subjects(self, then=None, labels: bool = False):
+        """只识别人物位置和部位（给主图裁切、规格图分正反面用），不打码。"""
         if self.busy:
             return
-        targets = [d for d in self.docs if d.subject is None and not d.error and not d.detected]
+        targets = [d for d in self.docs if not d.error and
+                   ((d.subject is None and not d.detected) or (labels and d.labels is None))]
         if not targets:
             if then:
                 then()
@@ -886,6 +902,7 @@ class MainWindow(QMainWindow):
             return
         d.w, d.h = w, h
         d.subject, d.face = subject_of(dets)
+        d.labels = sorted({x["label"] for x in dets})
         if getattr(self, "_analyze", False):
             if d.subject is None:
                 d.subject = (0.0, 0.0, float(w), float(h))
@@ -1104,6 +1121,8 @@ class MainWindow(QMainWindow):
         for b in getattr(self, "_nav_all", []):
             self._paint_nav_icon(b)
         self.canvas.apply_theme()
+        if hasattr(self, "spec_page"):
+            self.spec_page.apply_theme()
         self._placeholder = self._make_placeholder()
         for i in range(len(self.docs)):
             self._update_film_item(i)

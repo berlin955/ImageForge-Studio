@@ -1,3 +1,11 @@
 PySide6==6.7.3
 onnxruntime==1.19.2
 numpy==1.26.4
+# 智能规格：文字识别（rapidocr 用 --no-deps 单独装，避免装上带 Qt 的完整版 opencv）
+opencv-python-headless==4.10.0.84
+pyclipper==1.3.0.post6
+shapely==2.0.6
+PyYAML==6.0.2
+six==1.16.0
+Pillow==10.4.0
+tqdm==4.66.5

@@ -101,6 +101,10 @@ DEFAULTS: dict = {
         "folder": "主图",
         "logo": {"enabled": False, "file": "", "size": 0.2, "margin": 0.03, "opacity": 1.0, "corner": "tl"},
     },
+    "spec": {
+        "format": "jpg",
+        "last_template": "",
+    },
     "export": {
         "dir": "",
         "scope": "all",          # all | skip_attention
