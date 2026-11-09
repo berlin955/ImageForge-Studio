@@ -27,6 +27,9 @@ jobs:
           pip download --only-binary=:all: --python-version 3.13 --platform manylinux2014_x86_64 --platform manylinux_2_17_x86_64 \
             -d wheels pyclipper shapely tqdm || true
           pip download --no-deps -d wheels rapidocr_onnxruntime==1.4.4 || true
+          pip download --no-deps --only-binary=:all: --python-version 3.11 -d wheels rapidocr_onnxruntime==1.4.4 || true
+          pip download --no-deps -d wheels "rapidocr_onnxruntime==1.4.4" --no-binary=:none: || true
+          ls wheels | grep -i rapid || true
           pip download --only-binary=:all: --python-version 3.13 --platform manylinux2014_x86_64 --platform manylinux_2_17_x86_64 \
             -d wheels onnx onnxconverter-common protobuf ml_dtypes || true
           gh release download v3.4-weights -R notAI-tech/NudeNet -p 640m.onnx -D kit || true
