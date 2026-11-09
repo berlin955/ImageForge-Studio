@@ -6,7 +6,7 @@
 
 ## 下载安装
 
-到 [Releases](https://github.com/berlin955/MaskForge-Studio/releases/latest) 下载 `ImageForge-Studio-Setup-x.y.z.exe`，双击安装即可（不需要管理员权限）。
+到 [Releases](https://github.com/berlin955/ImageForge-Studio/releases/latest) 下载 `ImageForge-Studio-Setup-x.y.z.exe`，双击安装即可（不需要管理员权限）。
 也提供免安装的 `Portable.zip`，解压后运行 `MaskForge.exe`。
 
 软件每次启动会检查 GitHub 上有没有新版本，有的话提示「立即更新」，自动下载安装并重新打开。

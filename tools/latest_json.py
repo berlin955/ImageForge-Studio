@@ -9,7 +9,7 @@ from pathlib import Path
 ver = sys.argv[1].lstrip("vV")
 notes = re.sub(r"<!--.*?-->", "", Path(sys.argv[2]).read_text("utf-8"), flags=re.S).strip()
 folder = Path(sys.argv[3])
-repo = "berlin955/MaskForge-Studio"
+repo = "berlin955/ImageForge-Studio"
 exe = next(iter(sorted(folder.glob("*Setup*.exe"))), None)
 info = {"version": ver, "tag": f"v{ver}", "notes": notes,
         "page": f"https://github.com/{repo}/releases/tag/v{ver}"}

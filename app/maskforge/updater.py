@@ -17,7 +17,7 @@ from PySide6.QtCore import QThread, Signal
 from . import REPO, __version__
 
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
-UA = f"MaskForge-Studio/{__version__}"
+UA = f"ImageForge-Studio/{__version__}"
 
 
 def parse_version(s: str) -> tuple:

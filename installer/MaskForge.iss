@@ -4,7 +4,7 @@
 #endif
 #define MyAppName "智图工坊"
 #define MyAppExe "MaskForge.exe"
-#define MyRepo "https://github.com/berlin955/MaskForge-Studio"
+#define MyRepo "https://github.com/berlin955/ImageForge-Studio"
 
 [Setup]
 AppId={{6C1E2B3A-8F4D-4E5B-9A21-5D3C7B9E0F11}
