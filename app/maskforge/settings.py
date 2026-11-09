@@ -5,7 +5,7 @@ import os
 import sys
 
 from PySide6.QtCore import QSize, Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog,
                                QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMessageBox, QStackedWidget, QVBoxLayout,
@@ -58,8 +58,11 @@ class SettingsDialog(QDialog):
     def _page_general(self):
         c1 = Card("外观")
         self.theme = QComboBox()
-        self.theme.addItem("深色", "dark")
-        self.theme.addItem("浅色", "light")
+        from . import theme as _theme
+        for key in _theme.THEME_ORDER:
+            pm = QPixmap(14, 14)
+            pm.fill(QColor(_theme.PALETTES[key]["accent"]))
+            self.theme.addItem(QIcon(pm), _theme.PALETTES[key]["label"], key)
         self.theme.setCurrentIndex(max(0, self.theme.findData(self.cfg["theme"])))
         self.theme.currentIndexChanged.connect(self._theme_changed)
         lab = QLabel("主题")

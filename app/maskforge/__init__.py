@@ -1,6 +1,6 @@
 """智能打码工坊 MaskForge Studio"""
 
-__version__ = "1.0.6"
+__version__ = "1.1.0"
 
 APP_NAME = "智能打码工坊"
 APP_NAME_EN = "MaskForge Studio"

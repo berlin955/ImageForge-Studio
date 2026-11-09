@@ -80,6 +80,13 @@ def run_selftest(log_path: str | None = None) -> int:
         halves = merge_buttocks([{"label": "BUTTOCKS_EXPOSED", "score": 0.6, "box": (400, 1000, 600, 1300)},
                                  {"label": "BUTTOCKS_EXPOSED", "score": 0.6, "box": (590, 1010, 800, 1310)}])
         assert len(halves) == 1, halves
+        back = plan_layers([{"label": "BUTTOCKS_EXPOSED", "score": 0.7, "box": (400, 900, 800, 1250)},
+                            {"label": "FEMALE_GENITALIA_EXPOSED", "score": 0.5, "box": (570, 1230, 630, 1290)}],
+                           1200, 1600, cfg)
+        assert [l.part for l in back] == ["crack"], [(l.part, l.cx, l.cy) for l in back]
+        front = plan_layers([{"label": "FEMALE_GENITALIA_EXPOSED", "score": 0.6, "box": (540, 900, 660, 1000)}],
+                            1200, 1600, cfg)
+        assert [l.part for l in front] == ["lower"]
         log("one crack mask ok")
 
         theme.apply(app, "dark")
@@ -137,7 +144,17 @@ def run_selftest(log_path: str | None = None) -> int:
         sid = lib.add(str(src))
         assert lib.exists(sid)
         mw.on_library_changed()
-        mw.batch_panel.sync_from_cfg()
+        mw.side.sync_from_cfg()
+        from .panels import ExportDialog
+        ed = ExportDialog(mw)
+        ed.close()
+        for key in theme.THEME_ORDER:
+            mw.set_theme(key)
+        mw.set_film_filter("check")
+        mw.set_film_filter("all")
+        mw.add_layer("crack")
+        mw.side.refresh()
+        assert mw.side.s_layer.isVisibleTo(mw.side), "选中码后应显示码的属性"
         log("preview / stickers ok")
         from .settings import SettingsDialog
         dlg = SettingsDialog(mw)

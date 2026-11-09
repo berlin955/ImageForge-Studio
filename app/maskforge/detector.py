@@ -252,5 +252,16 @@ def plan_layers(dets: list[dict], img_w: int, img_h: int, cfg) -> list[Layer]:
                   for k in kept)
         if not dup:
             kept.append(l)
+    # 从背后拍时，模型会把两腿之间识别成「下体」，和股沟在同一条竖线上，只留股沟一个码
+    cracks = [l for l in kept if l.part == "crack"]
+    if cracks:
+        def behind(low: Layer) -> bool:
+            for c in cracks:
+                dx = abs(low.cx - c.cx)
+                dy = low.cy - c.cy
+                if dx < max(c.w, low.w) * 1.2 and -0.2 * c.h < dy < c.h * 1.8:
+                    return True
+            return False
+        kept = [l for l in kept if not (l.part == "lower" and behind(l))]
     kept.sort(key=lambda l: (l.cy, l.cx))
     return kept
