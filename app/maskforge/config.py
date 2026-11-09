@@ -102,6 +102,13 @@ DEFAULTS: dict = {
         "use_mask": True,
         "logo": {"enabled": False, "file": "", "size": 0.2, "margin": 0.03, "opacity": 1.0, "corner": "tl"},
     },
+    "detail": {
+        "format": "jpg",
+        "last_template": "",
+        "use_mask": True,
+        "width": 790,        # 详情宽度：750 / 790 / 1440
+        "slice": 0,          # 切片高度，0 表示不切
+    },
     "spec": {
         "format": "jpg",
         "last_template": "",

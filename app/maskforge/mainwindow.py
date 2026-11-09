@@ -264,7 +264,7 @@ class MainWindow(QMainWindow):
     def _build_shell(self):
         from .pages import AssetsPage, ComingSoonPage
         from .mainimage import MainImagePage
-        from .spec import SpecPage
+        from .spec import DetailPage, SpecPage
         central = QWidget()
         h = QHBoxLayout(central)
         h.setContentsMargins(0, 0, 0, 0)
@@ -294,8 +294,9 @@ class MainWindow(QMainWindow):
         self.assets_page = AssetsPage(self)
         self.main_page = MainImagePage(self)
         self.spec_page = SpecPage(self)
+        self.detail_page = DetailPage(self)
         built = {"assets": self.assets_page, "mask": self.mask_page, "main": self.main_page,
-                 "spec": self.spec_page}
+                 "spec": self.spec_page, "detail": self.detail_page}
         soon = {
             "spec": ("智能规格", "导入一张喜欢的规格图，自动挖空原来的模特照片、识别文字，换成你的模特图，文字可以随时修改。"),
             "detail": ("智能详情", "和智能规格一样换模特、改文字，支持很长的详情图，导出时可以自动切成几段。"),
@@ -512,6 +513,7 @@ class MainWindow(QMainWindow):
             self.assets_page.update_icon(d)
             self.main_page.update_icon(d)
             self.spec_page.update_icon(d)
+            self.detail_page.update_icon(d)
 
     def mark_thumb_dirty(self, d: ImageDoc | None = None):
         d = d or self.cur_doc()
@@ -674,6 +676,7 @@ class MainWindow(QMainWindow):
             self.assets_page.refresh()
             self.main_page.refresh()
             self.spec_page.refresh()
+            self.detail_page.refresh()
 
     def _update_steps(self):
         n = len(self.docs)
@@ -1124,6 +1127,7 @@ class MainWindow(QMainWindow):
         self.canvas.apply_theme()
         if hasattr(self, "spec_page"):
             self.spec_page.apply_theme()
+            self.detail_page.apply_theme()
         self._placeholder = self._make_placeholder()
         for i in range(len(self.docs)):
             self._update_film_item(i)

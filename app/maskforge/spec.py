@@ -1,4 +1,4 @@
-"""智能规格页：选模板 → 往图片位里填你的模特图 → 改文字 → 导出。"""
+"""智能规格 / 智能详情页：选模板 → 往图片位里填你的模特图 → 改文字 → 导出。两个功能共用这一套。"""
 from __future__ import annotations
 
 import copy
@@ -26,6 +26,13 @@ from .spec_engine import (build_template, delete_template, load_templates, save_
 from .widgets import Card, ColorButton, Segmented, button, muted, row, scroll_page
 
 DEFAULT_FONT = "Microsoft YaHei UI"
+
+KINDS = {
+    "spec": {"title": "智能规格", "noun": "规格图", "folder": "规格", "suffix": "_规格",
+             "sub": "导入别人的规格图做成模板，换上你的模特图，文字随时改"},
+    "detail": {"title": "智能详情", "noun": "详情图", "folder": "详情", "suffix": "_详情",
+               "sub": "导入别人的详情长图做成模板，换上你的模特图，文字随时改；导出时按宽度缩放、可以切片"},
+}
 FRONT = ("FACE_FEMALE", "FACE_MALE")
 BACK = ("BUTTOCKS_EXPOSED", "BUTTOCKS_COVERED", "ANUS_EXPOSED", "ANUS_COVERED")
 
@@ -339,10 +346,24 @@ class SpecView(QGraphicsView):
     def apply_theme(self):
         self.setBackgroundBrush(QColor(theme.current()["stage"]))
 
+    def long_mode(self) -> bool:
+        r = self.scene().sceneRect()
+        return r.width() > 0 and r.height() > r.width() * 1.6
+
     def fit(self):
         self.fit_mode = True
         r = self.scene().sceneRect()
-        if r.width() > 0:
+        if r.width() <= 0:
+            return
+        if self.long_mode():
+            # 长图按宽度铺满，上下滚动查看
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            vw = max(50, self.viewport().width() - 24)
+            k = vw / r.width()
+            from PySide6.QtGui import QTransform
+            self.setTransform(QTransform.fromScale(k, k))
+        else:
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             m = max(r.width(), r.height()) * 0.03
             self.fitInView(r.adjusted(-m, -m, m, m), Qt.AspectRatioMode.KeepAspectRatio)
 
@@ -355,6 +376,9 @@ class SpecView(QGraphicsView):
         item = self.itemAt(e.position().toPoint())
         if isinstance(item, SlotItem) and item.fill() and not self.page.edit_mode:
             super().wheelEvent(e)
+            return
+        if self.long_mode() and not (e.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            QGraphicsView.wheelEvent(self, e)   # 长图：滚轮上下滚动，按住 Ctrl 才缩放
             return
         f = 1.15 if (e.angleDelta().y() or e.angleDelta().x()) > 0 else 1 / 1.15
         self.fit_mode = False
@@ -401,9 +425,9 @@ class TemplateWorker(QThread):
     done = Signal(dict)
     failed = Signal(str)
 
-    def __init__(self, path: str, get_detector, parent=None):
+    def __init__(self, path: str, get_detector, kind: str = "spec", parent=None):
         super().__init__(parent)
-        self.path, self.get_detector = path, get_detector
+        self.path, self.get_detector, self.kind = path, get_detector, kind
 
     def run(self):
         try:
@@ -411,18 +435,21 @@ class TemplateWorker(QThread):
                 det = self.get_detector()
             except Exception:
                 det = None
-            self.done.emit(build_template(self.path, det))
+            self.done.emit(build_template(self.path, det, kind=self.kind))
         except Exception as e:
             self.failed.emit(str(e))
 
 
 # ================================================================ 页面
-class SpecPage(QWidget):
+class TemplatePage(QWidget):
+    kind = "spec"
+
     def __init__(self, mw):
         super().__init__()
         self.mw = mw
         self.cfg = mw.cfg
-        self.sc = self.cfg["spec"]
+        self.info = KINDS[self.kind]
+        self.sc = self.cfg[self.kind]
         self.templates: list[dict] = []
         self.tpl: dict | None = None
         self.fills: dict[str, dict] = {}      # slot_id -> {"doc": doc_id, "ov": {...}}
@@ -435,10 +462,10 @@ class SpecPage(QWidget):
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
-        top, th = page_header("智能规格", "导入别人的规格图做成模板，换上你的模特图，文字随时改")
+        top, th = page_header(self.info["title"], self.info["sub"])
         b_imp = button("导入新模板…")
         b_imp.clicked.connect(self.import_template)
-        self.b_export = button("导出这张规格图", "Primary")
+        self.b_export = button(f"导出这张{self.info['noun']}", "Primary")
         self.b_export.clicked.connect(self.export_current)
         th.addWidget(b_imp)
         th.addWidget(self.b_export)
@@ -469,7 +496,7 @@ class SpecPage(QWidget):
         self.b_edit = button("调整模板", "Tool", "移动、缩放图片位，或在空白处拖出新的图片位")
         self.b_edit.setCheckable(True)
         self.b_edit.toggled.connect(self.set_edit_mode)
-        b_orig = button("看原图", "Tool", "按住查看导入时的原始规格图")
+        b_orig = button("看原图", "Tool", f"按住查看导入时的原始{self.info['noun']}")
         b_orig.pressed.connect(lambda: self._show_original(True))
         b_orig.released.connect(lambda: self._show_original(False))
         b_fit = button("适应窗口", "Tool")
@@ -485,10 +512,10 @@ class SpecPage(QWidget):
         self.empty = QWidget()
         ev = QVBoxLayout(self.empty)
         ev.addStretch(1)
-        e1 = QLabel("还没有规格模板")
+        e1 = QLabel(f"还没有{self.info['title'][2:]}模板")
         e1.setAlignment(Qt.AlignmentFlag.AlignCenter)
         e1.setStyleSheet("font-size:20px;font-weight:700")
-        e2 = muted("点右上角「导入新模板」，选一张你喜欢的规格图。\n软件会自动找出照片框和文字，几秒钟就能做成模板。")
+        e2 = muted(f"点右上角「导入新模板」，选一张你喜欢的{self.info['noun']}。\n软件会自动找出照片框和文字，做成模板。")
         e2.setAlignment(Qt.AlignmentFlag.AlignCenter)
         eb = button("导入新模板…", "Primary")
         eb.setFixedWidth(180)
@@ -614,8 +641,21 @@ class SpecPage(QWidget):
         b_out = button("更改…")
         b_out.clicked.connect(lambda: (self.mw.choose_out_dir(), self._update_side()))
         c4.add(row(self.out_lbl, None, b_out))
+        if self.kind == "detail":
+            self.width_seg = Segmented([("750", "750 宽"), ("790", "790 宽"), ("1440", "1440 宽")])
+            self.width_seg.changed.connect(lambda k: self._save_sc("width", int(k)))
+            self.width_seg.set_value(str(self.sc.get("width", 790)))
+            c4.add(self.width_seg)
+            self.slice_combo = QComboBox()
+            for v, t in ((0, "不切片，导出一整张"), (1000, "每 1000 像素切一段"), (1500, "每 1500 像素切一段"),
+                         (2000, "每 2000 像素切一段")):
+                self.slice_combo.addItem(t, v)
+            self.slice_combo.setCurrentIndex(max(0, self.slice_combo.findData(int(self.sc.get("slice", 0)))))
+            self.slice_combo.currentIndexChanged.connect(
+                lambda _i: self._save_sc("slice", int(self.slice_combo.currentData())))
+            c4.add(self.slice_combo)
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("文件名，例如 6757白色_规格")
+        self.name_edit.setPlaceholderText(f"文件名，例如 6757白色{self.info['suffix']}")
         c4.add(self.name_edit)
 
         area, _ = scroll_page(c0, c1, c2, c3, c4)
@@ -629,7 +669,7 @@ class SpecPage(QWidget):
 
     # ---------------------------------------------------------------- 模板
     def reload_templates(self, select: str | None = None):
-        self.templates = load_templates("spec")
+        self.templates = load_templates(self.kind)
         self._loading = True
         self.tpl_combo.clear()
         for t in self.templates:
@@ -660,7 +700,7 @@ class SpecPage(QWidget):
         self.build_scene()
 
     def import_template(self):
-        f, _ = QFileDialog.getOpenFileName(self, "选择一张规格图", self.cfg["last_dir"],
+        f, _ = QFileDialog.getOpenFileName(self, f"选择一张{self.info['noun']}", self.cfg["last_dir"],
                                            "图片 (*.jpg *.jpeg *.png *.webp *.bmp)")
         if not f:
             return
@@ -669,7 +709,7 @@ class SpecPage(QWidget):
         dlg.setWindowModality(Qt.WindowModality.WindowModal)
         dlg.setMinimumDuration(0)
         dlg.show()
-        w = TemplateWorker(f, self.mw.get_detector, self)
+        w = TemplateWorker(f, self.mw.get_detector, self.kind, self)
         self._tw = w
 
         def ok(tpl):
@@ -844,6 +884,9 @@ class SpecPage(QWidget):
             role = s.get("role", "")
             d = take(fronts) if role == "正面" else take(backs) if role == "背面" else None
             d = d or take(docs)
+            if d is None and self.kind == "detail" and docs:
+                used.clear()          # 详情图的图片位多，素材不够就从头再用一遍
+                d = take(docs)
             if d:
                 self.fills[s["id"]] = {"doc": d.id, "ov": {}}
         for it in self.slot_items.values():
@@ -991,7 +1034,7 @@ class SpecPage(QWidget):
             self.bold.setChecked(bool(t.get("bold")))
             self._loading = False
         out = self.cfg["export"].get("dir") or ""
-        self.out_lbl.setText(f"保存到：{out}\\规格" if out else "保存到：还没有选择文件夹")
+        self.out_lbl.setText(f"保存到：{out}\\{self.info['folder']}" if out else "保存到：还没有选择文件夹")
         n = len(self.mw.docs)
         self.film_hint.setText("点一个图片位，再点这里的图片填进去" if n else "还没有素材：先在「素材」或「智能打码」里导入模特图")
 
@@ -1050,39 +1093,76 @@ class SpecPage(QWidget):
         p.end()
         return out
 
+    def finalize(self, img: QImage) -> list[QImage]:
+        """规格图原样输出；详情图按设置的宽度缩放，再按高度切成几段。"""
+        if self.kind != "detail":
+            return [img]
+        w = int(self.sc.get("width", 790))
+        if w and img.width() != w:
+            img = img.scaledToWidth(w, Qt.TransformationMode.SmoothTransformation)
+        step = int(self.sc.get("slice", 0))
+        if not step or img.height() <= step * 1.15:
+            return [img]
+        pieces, y = [], 0
+        while y < img.height():
+            h = min(step, img.height() - y)
+            if img.height() - (y + h) < step * 0.15:   # 最后一段太短，并到这一段里
+                h = img.height() - y
+            pieces.append(img.copy(0, y, img.width(), h))
+            y += h
+        return pieces
+
     def export_current(self):
         if not self.tpl or self.mw.busy:
             return
         empty = [s.get("role") for s in self.tpl["slots"] if s["id"] not in self.fills]
         if empty:
             r = QMessageBox.question(self, "导出", f"还有 {len(empty)} 个图片位没填图（{'、'.join(empty)}），"
-                                                   "会显示原规格图的背景。继续导出吗？")
+                                                   f"会显示原{self.info['noun']}的背景。继续导出吗？")
             if r != QMessageBox.StandardButton.Yes:
                 return
         root = self.mw._ensure_out_dir()
         if root is None:
             return
-        out = root / "规格"
+        out = root / self.info["folder"]
         out.mkdir(parents=True, exist_ok=True)
         name = self.name_edit.text().strip()
         if not name:
             first = next((self.mw.doc_by_id(f["doc"]) for f in self.fills.values()), None)
-            name = (first.path.stem if first else self.tpl.get("name", "规格")) + "_规格"
+            name = (first.path.stem if first else self.tpl.get("name", self.info["folder"])) + self.info["suffix"]
         fmt = self.sc.get("format", "jpg")
         ext = FORMATS.get(fmt, FORMATS["jpg"])[0]
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             img = self.render_output()
-            path = unique_path(out, f"{name}.{ext}", bool(self.cfg["export"].get("overwrite")), set())
-            save_image(img, path, {"format": fmt, "quality": int(self.cfg["export"].get("quality", 92))})
+            ex = {"format": fmt, "quality": int(self.cfg["export"].get("quality", 92))}
+            ow = bool(self.cfg["export"].get("overwrite"))
+            pieces = self.finalize(img)
+            if len(pieces) == 1:
+                path = unique_path(out, f"{name}.{ext}", ow, set())
+                save_image(pieces[0], path, ex)
+            else:
+                taken: set = set()
+                for i, piece in enumerate(pieces, 1):
+                    path = unique_path(out, f"{name}_{i:02d}.{ext}", ow, taken)
+                    taken.add(str(path).lower())
+                    save_image(piece, path, ex)
         except Exception as e:
             QApplication.restoreOverrideCursor()
             QMessageBox.warning(self, "导出失败", str(e))
             return
         QApplication.restoreOverrideCursor()
-        self.mw.status.showMessage(f"已导出规格图：{path}", 10000)
+        self.mw.status.showMessage(f"已导出{self.info['noun']}：{path}", 10000)
         if self.cfg["export"].get("open_after", True):
             from PySide6.QtCore import QUrl
             from PySide6.QtGui import QDesktopServices
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(out)))
         return path
+
+
+class SpecPage(TemplatePage):
+    kind = "spec"
+
+
+class DetailPage(TemplatePage):
+    kind = "detail"

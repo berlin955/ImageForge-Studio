@@ -373,6 +373,44 @@ def run_selftest(log_path: str | None = None) -> int:
         path = sp.export_current()
         assert path and Path(path).exists(), path
         log(f"spec export ok: {Path(path).name}")
+        # ---- 智能详情：长图模板（分段照片 + 文字），按宽度导出并切片 ----
+        rng = _np.random.default_rng(7)
+        H_ = 4200
+        arr = _np.full((H_, 1000, 3), 245, _np.uint8)
+        blocks_ = [(260, 1160), (1400, 2300), (2560, 3460)]
+        for y0, y1 in blocks_:
+            noise = rng.integers(40, 200, (y1 - y0, 900, 3), dtype=_np.uint8)
+            arr[y0:y1, 50:950] = cv2.GaussianBlur(noise, (5, 5), 0)
+        cv2.putText(arr, "NEW ARRIVAL", (250, 170), cv2.FONT_HERSHEY_SIMPLEX, 2.2, (40, 40, 40), 5, cv2.LINE_AA)
+        cv2.putText(arr, "SOFT COTTON 95", (240, 3700), cv2.FONT_HERSHEY_SIMPLEX, 1.8, (40, 40, 40), 4, cv2.LINE_AA)
+        det_src = tmp / "详情模板.png"
+        ok_, buf = cv2.imencode(".png", arr)
+        buf.tofile(str(det_src))
+        dtpl = build_template(str(det_src), None, "测试详情", kind="detail")
+        log(f"detail slots: {[(s['role'], int(s['y']), int(s['h'])) for s in dtpl['slots']]}")
+        log(f"detail ocr: {' | '.join(t['text'] for t in dtpl['texts'])}")
+        assert dtpl["kind"] == "detail" and len(dtpl["slots"]) >= 3, dtpl["slots"]
+        assert any("ARRIVAL" in t["text"].upper() for t in dtpl["texts"]), dtpl["texts"]
+        assert load_templates("detail") and not any(t["id"] == dtpl["id"] for t in load_templates("spec"))
+        dp = mw.detail_page
+        mw.show_page("detail")
+        dp.reload_templates(select=dtpl["id"])
+        app.processEvents()
+        assert dp.view.long_mode()
+        dp.auto_fill()
+        assert len(dp.fills) == len(dp.tpl["slots"]), (len(dp.fills), len(dp.tpl["slots"]))
+        dp.width_seg.set_value("790")
+        dp._save_sc("width", 790)
+        dp._save_sc("slice", 1500)
+        dp.name_edit.setText("测试详情图")
+        path = dp.export_current()
+        parts = sorted((tmp / "out" / "详情").glob("测试详情图_*"))
+        assert len(parts) >= 2, parts
+        heights = [QImage(str(f)).height() for f in parts]
+        assert all(QImage(str(f)).width() == 790 for f in parts), "详情宽度应为 790"
+        assert abs(sum(heights) - round(H_ * 790 / 1000)) <= 2, heights
+        log(f"detail export ok: {len(parts)} pieces {heights}")
+        dp._save_sc("slice", 0)
         mw.show_page("mask")
         from .settings import SettingsDialog
         dlg = SettingsDialog(mw)

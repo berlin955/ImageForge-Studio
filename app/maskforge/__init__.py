@@ -1,6 +1,6 @@
 """智图工坊 ImageForge Studio"""
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 APP_NAME = "智图工坊"
 APP_NAME_EN = "ImageForge Studio"
