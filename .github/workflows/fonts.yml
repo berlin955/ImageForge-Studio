@@ -57,7 +57,7 @@ jobs:
           cd npm && for t in *.tgz; do mkdir -p "../src/npm_${t%.tgz}" && tar -xzf "$t" -C "../src/npm_${t%.tgz}"; done; cd ..
           ls -la src
           cd src && for z in *.zip; do unzip -oq "$z" -d "${z%.zip}" || true; done && cd ..
-          find src \( -iname "*.otf" -o -iname "*.ttf" -o -iname "*.woff2" \) | grep -viE "HW|__MACOSX|Mono" | sort > all.txt
+          find src \( -iname "*.otf" -o -iname "*.ttf" -o -iname "*.woff2" \) | grep -viE "HW|__MACOSX|Mono|PuHuiTi-2-|RegularL3|VF|/web/" | sort > all.txt
           # 同一个字体有 otf/ttf/woff2 多份时只留一份（优先 otf > ttf > woff2）
           python - <<'PY2'
           import os
