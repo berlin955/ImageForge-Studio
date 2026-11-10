@@ -19,7 +19,7 @@ jobs:
       - name: 下载
         run: |
           mkdir -p qt
-          pip download --only-binary=:all: --python-version 3.13 --platform manylinux_2_28_x86_64 --platform manylinux_2_17_x86_64 --platform manylinux2014_x86_64 -d qt "PySide6-Essentials==6.7.3" "shiboken6==6.7.3"
+          pip download --only-binary=:all: --python-version 3.13 --platform manylinux_2_28_x86_64 --platform manylinux_2_17_x86_64 --platform manylinux2014_x86_64 -d qt "PySide6-Essentials==6.8.3" "shiboken6==6.8.3"
           ls -la qt
           zip -qj qt.zip qt/*
           ls -la qt.zip
