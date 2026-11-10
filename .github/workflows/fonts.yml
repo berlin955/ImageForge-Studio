@@ -16,34 +16,61 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - name: 下载字体
         run: |
           pip install --quiet fonttools brotli
           mkdir -p src out
-          for i in 1 2 3; do gh release download -R adobe-fonts/source-han-sans -p "SourceHanSansSC.zip" -D src --clobber && break; sleep 5; done || true
+          # 思源黑体：资源名每个版本不一样，列出来按名字挑简体中文的
+          gh api repos/adobe-fonts/source-han-sans/releases/latest -q '.assets[].name' | tee sans_assets.txt
+          A=$(grep -iE "^(SubsetOTF_CN|.*SourceHanSansSC)\.zip$" sans_assets.txt | grep -viE "HW|VF|Mono" | head -1)
+          [ -z "$A" ] && A=$(grep -iE "SC.*\.zip$|CN.*\.zip$" sans_assets.txt | grep -viE "HW|VF|Mono|ttc" | head -1)
+          echo "sans asset: $A"
+          [ -n "$A" ] && gh release download -R adobe-fonts/source-han-sans -p "$A" -D src || echo "FAIL sans"
           gh release download -R adobe-fonts/source-han-serif -p "09_SourceHanSerifSC.zip" -D src || true
-          try() { echo "== $1"; curl -fL --retry 2 -o "$2" "$1" && ls -la "$2" || { echo "FAIL $1"; rm -f "$2"; }; }
-          # 阿里巴巴普惠体 3.0、阿里妈妈字体（免费商用）：从 AUR 的打包脚本里找官方下载地址
-          for pkg in ttf-alibabasans-puhuiti3-fonts ttf-alimama-shuheiti ttf-alimama-fangyuanti ttf-alimama-dongfangdakai ttf-alimama-daoliti otf-alimama-shuheiti; do
-            echo "== PKGBUILD $pkg"
-            curl -fsL -A "Mozilla/5.0" "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=$pkg" -o "pk_$pkg" || { echo "FAIL pkgbuild $pkg"; continue; }
-            grep -iE "^(source|_url|url|pkgver)" "pk_$pkg" | head -8
-            python - "$pkg" <<'PY'
-          import re, sys, subprocess
-          pkg = sys.argv[1]
-          t = open(f"pk_{pkg}", encoding="utf-8", errors="ignore").read()
-          ver = re.search(r"^pkgver=(\S+)", t, re.M)
-          urls = re.findall(r"https?://[^\s'\")]+\.(?:zip|ttf|otf|7z)", t)
-          for u in urls:
-              u = u.replace("${pkgver}", ver.group(1) if ver else "").replace("$pkgver", ver.group(1) if ver else "")
-              out = "src/" + pkg + "_" + u.rsplit("/", 1)[-1]
-              r = subprocess.run(["curl", "-fL", "--retry", "2", "-A", "Mozilla/5.0", "-o", out, u])
-              print(("OK " if r.returncode == 0 else "FAIL ") + u)
-          PY
+          # 阿里巴巴普惠体、阿里妈妈字体（免费商用）：官方 OSS 下载不了时，用 npm 上别人打好的包
+          for u in https://puhuiti.oss-cn-hangzhou.aliyuncs.com/AlibabaPuHuiTi-3/AlibabaPuHuiTi-3.zip; do
+            curl -sS -o /dev/null -w "oss %{http_code}\n" -A "Mozilla/5.0" "$u" || true
           done
+          npm search --json --searchlimit=40 alibaba puhuiti > s1.json || true
+          npm search --json --searchlimit=40 alimama font > s2.json || true
+          npm search --json --searchlimit=40 "@fontpkg" > s3.json || true
+          python - <<'PY2'
+          import json, re, subprocess, os
+          names = set()
+          for f in ("s1.json", "s2.json", "s3.json"):
+              try:
+                  for x in json.load(open(f)):
+                      names.add(x["name"])
+              except Exception as e:
+                  print("search fail", f, e)
+          names = sorted(n for n in names if re.search(r"puhuiti|pu-hui-ti|alimama|ali-ma-ma", n, re.I))
+          print("candidates:", names)
+          os.makedirs("npm", exist_ok=True)
+          for n in names:
+              r = subprocess.run(["npm", "pack", n, "--pack-destination", "npm"], capture_output=True, text=True)
+              print(("OK " if r.returncode == 0 else "FAIL ") + n, r.stdout.strip()[-80:], r.stderr.strip()[-120:])
+          PY2
+          ls -la npm || true
+          cd npm && for t in *.tgz; do mkdir -p "../src/npm_${t%.tgz}" && tar -xzf "$t" -C "../src/npm_${t%.tgz}"; done; cd ..
           ls -la src
           cd src && for z in *.zip; do unzip -oq "$z" -d "${z%.zip}" || true; done && cd ..
-          find src \( -iname "*.otf" -o -iname "*.ttf" \) | grep -v -i "HW\|__MACOSX\|/web/\|woff" | sort > list.txt
+          find src \( -iname "*.otf" -o -iname "*.ttf" -o -iname "*.woff2" \) | grep -viE "HW|__MACOSX|Mono" | sort > all.txt
+          # 同一个字体有 otf/ttf/woff2 多份时只留一份（优先 otf > ttf > woff2）
+          python - <<'PY2'
+          import os
+          best = {}
+          rank = {".otf": 0, ".ttf": 1, ".woff2": 2}
+          for l in open("all.txt"):
+              p = l.strip()
+              stem, ext = os.path.splitext(os.path.basename(p))
+              k = stem.lower()
+              if k not in best or rank[ext.lower()] < rank[os.path.splitext(best[k])[1].lower()]:
+                  best[k] = p
+          open("list.txt", "w").write("\n".join(sorted(best.values())) + "\n")
+          PY2
           cat list.txt
       - name: 精简（GB2312 常用汉字 + 英文 + 标点）
         run: |
