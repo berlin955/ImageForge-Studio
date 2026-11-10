@@ -1,0 +1,27 @@
+name: devkit4
+
+# 开发用：下载 Linux 版 PySide6（给开发环境截图检查界面用，不是软件版本）
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: 下载
+        run: |
+          mkdir -p qt
+          pip download --only-binary=:all: --python-version 3.13 --platform manylinux_2_28_x86_64 --platform manylinux_2_17_x86_64 --platform manylinux2014_x86_64 -d qt "PySide6-Essentials==6.7.3" "shiboken6==6.7.3"
+          ls -la qt
+          zip -qj qt.zip qt/*
+          ls -la qt.zip
+      - name: 上传
+        run: gh release upload devkit qt.zip -R ${{ github.repository }} --clobber
