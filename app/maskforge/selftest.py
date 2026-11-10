@@ -421,6 +421,7 @@ def run_selftest(log_path: str | None = None) -> int:
         assert out_img.width() == 1000 and out_img.height() == 1000
         # 没改过的字保持原图像素；改过的字才擦掉重画
         from .spec_engine import text_changed
+        from .spec import text_rect
         tz = next(t for t in sp.tpl["texts"] if "SIZE" in t["text"].upper())
         assert not text_changed(tz), "没动过的字被当成改过了"
         assert text_changed(next(t for t in sp.tpl["texts"] if t["text"] == "7039 粉色"))
@@ -430,6 +431,55 @@ def run_selftest(log_path: str | None = None) -> int:
                     for y in range(int(tz["y"]), int(tz["y"] + tz["h"]), 2)))
         assert abs(out_img.pixelColor(dark[1], dark[2]).lightness() - dark[0]) < 12, "原字被改动了"
         log("keep original text ok")
+        # ---- 字符面板（参考 PS）：选中文字 → 面板可用；字号、吸管、恢复原样、画布上缩放、直接改字 ----
+        from PySide6.QtCore import QPointF as _QP
+        ti = next(it for it in sp.text_items.values() if "SIZE" in it.t["text"].upper())
+        cp = sp.char_panel
+        sp.view.scene().clearSelection()
+        assert cp.t is None and not cp.box.isEnabled(), "没选中文字时面板应该是灰的"
+        ti.setSelected(True)
+        app.processEvents()
+        assert cp.t is ti.t and cp.box.isEnabled(), "选中文字后面板没有跟上"
+        assert cp.picker.count() > 0, "字体列表是空的"
+        size0 = float(ti.t["size"])
+        cp.size.setValue(size0 + 6)
+        assert abs(ti.t["size"] - (size0 + 6)) < 0.1 and text_changed(ti.t), ti.t["size"]
+        app.processEvents()
+        cp.refresh_compare_now()
+        assert cp.compare.pixmap() is not None and not cp.compare.pixmap().isNull(), "对比图没画出来"
+        pv = sp.text_preview(ti.t)
+        assert pv and not pv[0].isNull() and pv[0].size() == pv[1].size(), "原图 / 现在 对比图出错"
+        sp.set_eyedropper(True)
+        sp.pick_color_at(_QP(5, 5))               # 左上角是照片位里的随机像素
+        assert not sp.eyedrop and ti.t["color"] == QImage(str(tpl_src)).pixelColor(5, 5).name(), ti.t["color"]
+        cp._reset()
+        assert not text_changed(ti.t), "恢复原样后应该和原图一样"
+        # 拖右下角放大一倍：字号翻倍，左上角不动
+        r0 = ti.mapRectToScene(text_rect(ti.t))
+        ti._begin_scale("br", r0.bottomRight())
+
+        class _Ev:
+            def __init__(self, p):
+                self._p = p
+
+            def scenePos(self):
+                return self._p
+        ti.mouseMoveEvent(_Ev(r0.topLeft() + (r0.bottomRight() - r0.topLeft()) * 2))
+        ti.mouseReleaseEvent(_Ev(r0.topLeft()))
+        r1 = ti.mapRectToScene(text_rect(ti.t))
+        assert abs(ti.t["size"] / size0 - 2) < 0.05, ti.t["size"]
+        assert abs(r1.left() - r0.left()) < 3 and abs(r1.top() - r0.top()) < 3, (r0, r1)
+        cp._reset()
+        # 画布上直接改字
+        sp.start_inline_edit(ti)
+        ed = sp._inline[0]
+        ed.setText("SIZE 90-140")
+        ed.textEdited.emit("SIZE 90-140")
+        ed.returnPressed.emit()
+        assert ti.t["text"] == "SIZE 90-140" and sp.text_edits[ti.t["id"]].text() == "SIZE 90-140"
+        assert getattr(sp, "_inline", None) is None
+        sp.view.grab()
+        log("char panel ok")
         sp.name_edit.setText("测试规格图")
         path = sp.export_current()
         assert path and Path(path).exists(), path
@@ -521,7 +571,8 @@ def run_selftest(log_path: str | None = None) -> int:
         # ---- 中文文字识别（仿真实规格图：米色底、深色标题框、胶囊相框）----
         import os as _os
         font_file = next((f for f in (r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simsun.ttc",
-                                      r"C:\Windows\Fonts\simhei.ttf") if _os.path.exists(f)), None)
+                                      r"C:\Windows\Fonts\simhei.ttf",
+                                      "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc") if _os.path.exists(f)), None)
         if font_file:
             from PIL import Image as _PI, ImageDraw as _PD, ImageFont as _PF
             zh = _np.full((800, 800, 3), (233, 218, 203), _np.uint8)
@@ -552,6 +603,23 @@ def run_selftest(log_path: str | None = None) -> int:
             log(f"zh slots: {[(int(s['x']), int(s['y']), int(s['w']), int(s['h']), s.get('radius')) for s in ztpl['slots']]}")
             assert "7114" in zt and "体重" in zt, f"中文没有识别出来：{zt}"
             assert len(ztpl["slots"]) == 2, ztpl["slots"]
+            from . import fonts as _fonts
+            log(f"font pack: {len(_fonts.catalog())} fonts, registered {_fonts.register_all()}")
+            if _fonts.has_pack():
+                log("zh fonts: " + " | ".join(f"{t['text']}={t.get('font')} {t.get('size', 0):.1f}px sp{t.get('spacing', 0)}"
+                                               for t in ztpl["texts"]))
+                assert any(t.get("font") for t in ztpl["texts"]), "没有自动匹配字体"
+                assert not any(text_changed(t) for t in ztpl["texts"]), "匹配字体后没改过的字被当成改过了"
+                # 测试图是用微软雅黑（黑体类）画的：应该配上黑体类，不是宋体
+                t7 = next(t for t in ztpl["texts"] if "7114" in t["text"])
+                assert _fonts.stem_info(t7["font"])["cat"] == "sans", t7["font"]
+                # 用自动匹配的字体画出来的字，大小、位置要和原字对得上
+                from .spec import text_font
+                from PySide6.QtGui import QFontMetricsF as _FM
+                r7 = text_rect(t7)
+                log(f"7114 rect {r7.left() + t7['x']:.0f},{r7.top() + t7['y']:.0f} {r7.width():.0f}x{r7.height():.0f}; "
+                    f"family {text_font(t7).family()} / {_FM(text_font(t7)).ascent():.1f}")
+                assert 500 <= r7.left() + t7["x"] <= 545, r7
         else:
             log("zh ocr skipped: no font")
         # ---- 智能详情：长图模板（分段照片 + 文字），按宽度导出并切片 ----

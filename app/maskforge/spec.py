@@ -40,17 +40,50 @@ BACK = ("BUTTOCKS_EXPOSED", "BUTTOCKS_COVERED", "ANUS_EXPOSED", "ANUS_COVERED")
 
 # ================================================================ 绘制（编辑和导出共用）
 def text_font(t: dict) -> QFont:
-    f = QFont(t.get("family") or DEFAULT_FONT)
+    from . import fonts
+    if t.get("font"):
+        f = fonts.qfont(t["font"], t.get("weight"), t.get("cat"))
+    else:
+        f = QFont(t.get("family") or DEFAULT_FONT)
+        f.setBold(bool(t.get("bold")))
     f.setPixelSize(max(4, int(round(t.get("size", 24)))))
-    f.setBold(bool(t.get("bold")))
+    sp = float(t.get("spacing") or 0)
+    if abs(sp) > 0.01:
+        f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, sp)
+    if t.get("italic"):
+        f.setItalic(True)
+    f.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
     return f
 
 
+def _advance(fm: QFontMetricsF, text: str, spacing: float) -> float:
+    # Qt 的字距会加在每个字后面（包括最后一个字），画面上最后一个字后面那段不算宽度
+    w = fm.horizontalAdvance(text or " ")
+    if text and abs(spacing) > 0.01:
+        w -= spacing
+    return max(w, 8.0)
+
+
 def text_rect(t: dict) -> QRectF:
-    fm = QFontMetricsF(text_font(t))
-    w = max(fm.horizontalAdvance(t.get("text") or " "), 8.0)
-    h = max(fm.height(), float(t.get("h", 0)))
-    return QRectF(0, 0, w, h)
+    """文字图层的范围（相对 t["x"], t["y"]）。有「基线」记录的（自动匹配过字体的）按原字的位置摆，
+    改了字以后按对齐方式（左 / 中 / 右）以原来那行字为准往两边伸。"""
+    f = text_font(t)
+    fm = QFontMetricsF(f)
+    sp = float(t.get("spacing") or 0)
+    w = _advance(fm, t.get("text") or " ", sp)
+    asc, desc = fm.ascent(), fm.descent()
+    bl = t.get("bl")
+    if bl:
+        bx, by = float(bl[0]), float(bl[1])
+    else:
+        h = max(fm.height(), float(t.get("h", 0)))
+        bx, by = 0.0, (h - (asc + desc)) / 2 + asc
+    al = t.get("align") or "left"
+    o = t.get("orig") or {}
+    if al != "left" and o.get("text"):
+        w0 = _advance(fm, o["text"], sp)
+        bx += (w0 - w) / 2 if al == "center" else (w0 - w)
+    return QRectF(bx, by - asc, w, asc + desc)
 
 
 def draw_text(p: QPainter, t: dict, origin: QPointF | None = None):
@@ -58,10 +91,9 @@ def draw_text(p: QPainter, t: dict, origin: QPointF | None = None):
     fm = QFontMetricsF(f)
     r = text_rect(t)
     x, y = (origin.x(), origin.y()) if origin is not None else (t["x"], t["y"])
-    base = y + (r.height() - (fm.ascent() + fm.descent())) / 2 + fm.ascent()
     p.setFont(f)
     p.setPen(QColor(t.get("color", "#000000")))
-    p.drawText(QPointF(x, base), t.get("text", ""))
+    p.drawText(QPointF(x + r.left(), y + r.top() + fm.ascent()), t.get("text", ""))
 
 
 def render_slot(slot: dict, doc, ov: dict, library, scale: float, preview: bool,
@@ -346,11 +378,15 @@ class SlotItem(QGraphicsObject):
 
 
 class TextItem(QGraphicsObject):
+    """文字图层。选中后四个角有小方块：拖角整体缩放（字号、字距一起变，对角不动）；双击直接改字。"""
+    HANDLE_PX = 8
+
     def __init__(self, page, t: dict):
         super().__init__()
         self.page = page
         self.t = t
         self._start = None
+        self._scale = None
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptHoverEvents(True)
         self.setZValue(5)
@@ -362,34 +398,77 @@ class TextItem(QGraphicsObject):
         self.update()
         self.page.schedule_bg_refresh()
 
+    def _k(self) -> float:
+        return max(1e-3, self.page.view_scale())
+
     def boundingRect(self) -> QRectF:
-        return text_rect(self.t).adjusted(-3, -3, 3, 3)
+        m = max(3.0, self.HANDLE_PX / self._k())
+        return text_rect(self.t).adjusted(-m, -m, m, m)
+
+    def _corners(self):
+        r = text_rect(self.t)
+        return {"tl": r.topLeft(), "tr": r.topRight(), "bl": r.bottomLeft(), "br": r.bottomRight()}
+
+    def _handle_at(self, pos: QPointF):
+        if not self.isSelected():
+            return None
+        tol = self.HANDLE_PX / self._k()
+        for name, pt in self._corners().items():
+            if abs(pos.x() - pt.x()) <= tol and abs(pos.y() - pt.y()) <= tol:
+                return name
+        return None
 
     def paint(self, p: QPainter, opt, widget=None):
         from .spec_engine import text_changed
         if text_changed(self.t):
             draw_text(p, self.t, QPointF(0, 0))     # 没改过的字，原图上就有，不重画
-        if self.page.in_review() and not self.isSelected() and not self.page.exporting:
+        if self.page.exporting:
+            return
+        r = text_rect(self.t)
+        if self.page.in_review() and not self.isSelected():
             c = QColor(theme.current()["accent"])
             pen = QPen(c, 1.3, Qt.PenStyle.DashLine)
             pen.setCosmetic(True)
             p.setPen(pen)
             c.setAlphaF(0.12)
             p.setBrush(c)
-            p.drawRect(self.boundingRect())
-        if self.isSelected() and not self.page.exporting:
-            pen = QPen(QColor(theme.current()["accent"]), 1.5, Qt.PenStyle.DashLine)
+            p.drawRect(r)
+        if self.isSelected():
+            acc = QColor(theme.current()["accent"])
+            pen = QPen(acc, 1.3, Qt.PenStyle.DashLine)
             pen.setCosmetic(True)
             p.setPen(pen)
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawRect(self.boundingRect())
+            p.drawRect(r)
+            hs = self.HANDLE_PX / self._k()
+            pen = QPen(acc, 1.3)
+            pen.setCosmetic(True)
+            p.setPen(pen)
+            p.setBrush(QColor("#ffffff"))
+            for pt in self._corners().values():
+                p.drawRect(QRectF(pt.x() - hs / 2, pt.y() - hs / 2, hs, hs))
 
     def hoverMoveEvent(self, e):
-        self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+        h = self._handle_at(e.pos())
+        if h in ("tl", "br"):
+            self.setCursor(QCursor(Qt.CursorShape.SizeFDiagCursor))
+        elif h in ("tr", "bl"):
+            self.setCursor(QCursor(Qt.CursorShape.SizeBDiagCursor))
+        else:
+            self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
 
     def mousePressEvent(self, e):
         if e.button() != Qt.MouseButton.LeftButton:
             e.ignore()
+            return
+        if self.page.eyedrop:
+            self.page.pick_color_at(e.scenePos())
+            e.accept()
+            return
+        h = self._handle_at(e.pos())
+        if h:
+            self._begin_scale(h, e.scenePos())
+            e.accept()
             return
         sc = self.scene()
         if sc and not self.isSelected():
@@ -398,7 +477,34 @@ class TextItem(QGraphicsObject):
         self._start = (e.scenePos(), self.t["x"], self.t["y"])
         e.accept()
 
+    def _begin_scale(self, h: str, sp: QPointF):
+        if not self.t.get("bl"):
+            # 还没有基线记录的字（手动加的）：先按现在画出来的位置记下来，缩放时整体等比
+            fm = QFontMetricsF(text_font(self.t))
+            r0 = text_rect(dict(self.t, align="left"))
+            self.t["bl"] = [r0.left(), r0.top() + fm.ascent()]
+        opp = {"tl": "br", "br": "tl", "tr": "bl", "bl": "tr"}[h]
+        o_rel = self._corners()[opp]
+        o_scene = QPointF(self.t["x"] + o_rel.x(), self.t["y"] + o_rel.y())
+        d0 = max(2.0, ((sp.x() - o_scene.x()) ** 2 + (sp.y() - o_scene.y()) ** 2) ** 0.5)
+        self._scale = {"o_rel": o_rel, "o_scene": o_scene, "d0": d0, "size": float(self.t.get("size", 24)),
+                       "spacing": float(self.t.get("spacing") or 0), "bl": list(self.t["bl"])}
+
     def mouseMoveEvent(self, e):
+        if self._scale:
+            s = self._scale
+            sp = e.scenePos()
+            d = ((sp.x() - s["o_scene"].x()) ** 2 + (sp.y() - s["o_scene"].y()) ** 2) ** 0.5
+            k = max(0.08, min(25.0, d / s["d0"]))
+            self.t["size"] = round(max(4.0, s["size"] * k), 2)
+            k = self.t["size"] / s["size"]
+            self.t["spacing"] = round(s["spacing"] * k, 2)
+            self.t["bl"] = [s["bl"][0] * k, s["bl"][1] * k]
+            self.t["x"] = s["o_scene"].x() - s["o_rel"].x() * k
+            self.t["y"] = s["o_scene"].y() - s["o_rel"].y() * k
+            self.sync()
+            self.page.char_panel.load(self.t)
+            return
         if not self._start:
             return
         sp, x, y = self._start
@@ -407,9 +513,15 @@ class TextItem(QGraphicsObject):
         self.sync()
 
     def mouseReleaseEvent(self, e):
-        if self._start:
+        if self._start or self._scale:
             self._start = None
+            self._scale = None
             self.page.on_template_changed(dirty=True)
+            self.page.char_panel.refresh_compare()
+
+    def mouseDoubleClickEvent(self, e):
+        self.page.start_inline_edit(self)
+        e.accept()
 
 
 class SpecView(QGraphicsView):
@@ -418,7 +530,11 @@ class SpecView(QGraphicsView):
     def __init__(self, page):
         super().__init__()
         self.page = page
-        self.setScene(QGraphicsScene(self))
+        sc = QGraphicsScene(self)
+        # 图片位、文字框的范围会随缩放变（手柄按屏幕像素画）：不用空间索引，免得索引过期导致闪退。
+        # 画布上就几十个元素，不用索引也不慢
+        sc.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
+        self.setScene(sc)
         self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
@@ -474,8 +590,44 @@ class SpecView(QGraphicsView):
             if isinstance(it, SlotItem):
                 it.prepareGeometryChange()
 
+    def keyPressEvent(self, e):
+        it = self.page.selected()
+        if isinstance(it, TextItem) and not self.page.scanning:
+            t = it.t
+            key, mods = e.key(), e.modifiers()
+            ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
+            shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
+            step = 10.0 if shift else 1.0
+            moves = {Qt.Key.Key_Left: (-step, 0), Qt.Key.Key_Right: (step, 0),
+                     Qt.Key.Key_Up: (0, -step), Qt.Key.Key_Down: (0, step)}
+            if key in moves and not ctrl:
+                dx, dy = moves[key]
+                t["x"] += dx
+                t["y"] += dy
+                it.sync()
+                self.page.on_template_changed(dirty=True)
+                return
+            if ctrl and shift and key in (Qt.Key.Key_Greater, Qt.Key.Key_Period, Qt.Key.Key_Less, Qt.Key.Key_Comma):
+                up = key in (Qt.Key.Key_Greater, Qt.Key.Key_Period)
+                size = float(t.get("size", 24))
+                self.page.char_panel.size.setValue(max(4.0, size + (2.0 if up else -2.0)))
+                return
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_F2):
+                self.page.start_inline_edit(it)
+                return
+            if key == Qt.Key.Key_Delete:
+                self.page.delete_selected_text()
+                return
+        if e.key() == Qt.Key.Key_Escape and self.page.eyedrop:
+            self.page.char_panel.dropper.setChecked(False)
+            return
+        super().keyPressEvent(e)
+
     def mousePressEvent(self, e):
         item = self.itemAt(e.position().toPoint())
+        if self.page.eyedrop and e.button() == Qt.MouseButton.LeftButton:
+            self.page.pick_color_at(self.mapToScene(e.position().toPoint()))
+            return
         if self.page.edit_mode and e.button() == Qt.MouseButton.LeftButton and not isinstance(item, (SlotItem, TextItem)):
             self._band = self.mapToScene(e.position().toPoint())
             from PySide6.QtWidgets import QGraphicsRectItem
@@ -551,6 +703,7 @@ class TemplatePage(QWidget):
         self.scanning = False
         self._film_ids: list[str] = []
         self._loading = False
+        self.eyedrop = False
 
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
@@ -740,29 +893,9 @@ class TemplatePage(QWidget):
         self.b_del_text = button("删除选中文字", "Ghost")
         self.b_del_text.clicked.connect(self.delete_selected_text)
         c3.add(row(b_add, None, self.b_del_text))
-        self.style_box = QWidget()
-        sb = QVBoxLayout(self.style_box)
-        sb.setContentsMargins(0, 4, 0, 0)
-        sb.setSpacing(8)
-        self.font_combo = QFontComboBox()
-        self.font_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.font_combo.setMinimumContentsLength(8)
-        self.font_combo.setWritingSystem(QFontDatabase.WritingSystem.SimplifiedChinese)
-        self.font_combo.currentFontChanged.connect(lambda f: self._set_text("family", f.family()))
-        sb.addWidget(self.font_combo)
-        self.size_spin = QSpinBox()
-        self.size_spin.setRange(6, 400)
-        self.size_spin.setSuffix(" px")
-        self.size_spin.valueChanged.connect(lambda v: self._set_text("size", float(v)))
-        self.color_btn = ColorButton("#000000")
-        self.color_btn.colorChanged.connect(lambda c: self._set_text("color", c))
-        self.bold = QCheckBox("加粗")
-        self.bold.toggled.connect(lambda on: self._set_text("bold", on))
-        sb.addLayout(row(self.size_spin, self.color_btn, self.bold))
-        b_all_font = button("所有文字都用这个字体", "Ghost")
-        b_all_font.clicked.connect(self._font_to_all)
-        sb.addWidget(b_all_font)
-        c3.add(self.style_box)
+        from .textpanel import CharPanel
+        self.char_panel = CharPanel(self)
+        c3.add(self.char_panel)
 
         c4 = Card("导出")
         self.fmt = Segmented([("jpg", "JPG"), ("png", "PNG"), ("webp", "WebP")])
@@ -871,6 +1004,14 @@ class TemplatePage(QWidget):
             if r == QMessageBox.StandardButton.Yes:
                 save_template(self.tpl)
         self.tpl = copy.deepcopy(self.templates[idx])
+        # 旧模板 / 导入时还没有字体包：现在补上「每段字像哪个字体」（一般不到一秒）
+        from .spec_engine import ensure_fonts
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            if ensure_fonts(self.tpl):
+                self.templates[idx] = copy.deepcopy(self.tpl)
+        finally:
+            QApplication.restoreOverrideCursor()
         self.sc["last_template"] = self.tpl["id"]
         self.cfg.save()
         self.dirty = False
@@ -885,43 +1026,73 @@ class TemplatePage(QWidget):
             return
         self.ensure_layout_model(lambda: self.start_scan(f))
 
-    def ensure_layout_model(self, then):
-        """第一次用时下载 AI 模型（照片识别、AI 去字），一次提示、依次下载；不想下载也可以先用普通识别。"""
-        from . import inpaint, layout_model
+    def _missing_downloads(self, fonts_only: bool = False) -> list[dict]:
+        from . import fonts, inpaint, layout_model
         need = []
-        for mod, label in ((layout_model, "照片识别"), (inpaint, "AI 去字")):
-            path = mod.layout_model_path() if mod is layout_model else mod.inpaint_model_path()
-            if not path.exists() and mod.MODEL_SHA256:
-                need.append((mod, label))
+        if not fonts_only:
+            if not layout_model.layout_model_path().exists() and layout_model.MODEL_SHA256:
+                need.append({"label": "照片识别", "url": layout_model.model_url(), "name": "layout.onnx",
+                             "sha": layout_model.MODEL_SHA256, "size": layout_model.MODEL_SIZE,
+                             "dst": layout_model.downloaded_path()})
+            if not inpaint.inpaint_model_path().exists() and inpaint.MODEL_SHA256:
+                need.append({"label": "AI 去字", "url": inpaint.model_url(), "name": "lama.onnx",
+                             "sha": inpaint.MODEL_SHA256, "size": inpaint.MODEL_SIZE, "dst": inpaint.downloaded_path()})
+        if not fonts.has_pack() and fonts.PACK_SHA256:
+            need.append({"label": "字体包", "url": fonts.pack_url(), "name": "fonts.zip",
+                         "sha": fonts.PACK_SHA256, "size": fonts.PACK_SIZE, "dst": None})
+        return need
+
+    def ensure_layout_model(self, then):
+        """第一次用时下载 AI 模型（照片识别、AI 去字）和字体包，一次提示、依次下载；不想下载也可以先用普通识别。"""
+        need = self._missing_downloads()
         if not need or self.cfg.data.get("layout_declined"):
             then()
             return
-        total = sum(m.MODEL_SIZE for m, _ in need)
+        total = sum(n["size"] for n in need)
         box = QMessageBox(self)
         box.setWindowTitle("下载 AI 模型")
-        box.setText(f"第一次使用需要下载 AI 模型（{'、'.join(l for _, l in need)}，共约 {total // 1048576} MB，只下载一次）。\n\n"
+        box.setText(f"第一次使用需要下载（{'、'.join(n['label'] for n in need)}，共约 {total // 1048576} MB，只下载一次）。\n\n"
                     "照片识别：深色背景、模糊照片当底色的模板也能准确找出照片框；\n"
-                    "AI 去字：擦掉原来的字时，把花纹、渐变底一起补回来。")
+                    "AI 去字：擦掉原来的字时，把花纹、渐变底一起补回来；\n"
+                    "字体包：思源宋体 / 思源黑体 / 阿里巴巴普惠体等免费商用字体，自动配上和原图最像的字体。")
         b_dl = box.addButton("现在下载", QMessageBox.ButtonRole.AcceptRole)
         box.addButton("先用普通识别", QMessageBox.ButtonRole.RejectRole)
         box.exec()
         if box.clickedButton() is not b_dl:
             then()
             return
+        self._download(need, then)
+
+    def download_fonts(self):
+        need = self._missing_downloads(fonts_only=True)
+        if not need:
+            return
+
+        def after():
+            from . import fonts
+            from .spec_engine import ensure_fonts
+            fonts.register_all()
+            if self.tpl and ensure_fonts(self.tpl):
+                self.build_scene()
+            self._update_side()
+        self._download(need, after)
+
+    def _download(self, need: list[dict], then):
         from .updater import Downloader
-        dlg = QProgressDialog("正在下载 AI 模型…", "取消", 0, 1000, self)
-        dlg.setWindowTitle("下载 AI 模型")
+        total = sum(n["size"] for n in need)
+        dlg = QProgressDialog("正在下载…", "取消", 0, 1000, self)
+        dlg.setWindowTitle("下载 AI 模型和字体")
         dlg.setMinimumDuration(0)
         dlg.setAutoClose(False)
         dlg.setValue(0)
-        state = {"done_bytes": 0, "i": 0, "w": None, "cancel": False}
+        state = {"done_bytes": 0, "i": 0, "w": None}
 
         def finish(msg=None):
             dlg.close()
             self.mw._layout = "unset"
             self.mw._inpainter = "unset"
             if msg and msg != "已取消":
-                QMessageBox.warning(self, "下载 AI 模型",
+                QMessageBox.warning(self, "下载",
                                     f"下载没成功：{msg}\n\n这次先用普通识别；下次导入模板时会再试。"
                                     "也可以在「设置 → 更新」里换一条下载线路。")
             then()
@@ -930,24 +1101,31 @@ class TemplatePage(QWidget):
             if state["i"] >= len(need):
                 finish()
                 return
-            mod, label = need[state["i"]]
-            name = "layout.onnx" if mod is layout_model else "lama.onnx"
-            w = Downloader(mod.model_url(), name, mod.MODEL_SHA256, mod.MODEL_SIZE, self)
+            n = need[state["i"]]
+            w = Downloader(n["url"], n["name"], n["sha"], n["size"], self)
             state["w"] = w
-            dlg.setLabelText(f"正在下载{label}模型（{state['i'] + 1}/{len(need)}）…")
+            dlg.setLabelText(f"正在下载{n['label']}（{state['i'] + 1}/{len(need)}）…")
             w.progress.connect(lambda got, _tot: dlg.setValue(int((state["done_bytes"] + got) * 1000 / max(1, total))))
-            w.status.connect(lambda m, lb=label: dlg.setLabelText(f"{lb}：{m}"))
+            w.status.connect(lambda m, lb=n["label"]: dlg.setLabelText(f"{lb}：{m}"))
 
-            def ok(path, mod=mod):
+            def ok(path, n=n):
                 try:
-                    import shutil
-                    dst = mod.downloaded_path()
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.move(path, dst)
+                    if n["dst"] is None:
+                        from . import fonts
+                        fonts.install_pack(path)
+                        fonts.register_all()
+                        try:
+                            Path(path).unlink()
+                        except Exception:
+                            pass
+                    else:
+                        import shutil
+                        n["dst"].parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(path, n["dst"])
                 except Exception as e:
-                    finish(f"保存模型失败：{e}")
+                    finish(f"保存失败：{e}")
                     return
-                state["done_bytes"] += mod.MODEL_SIZE
+                state["done_bytes"] += n["size"]
                 state["i"] += 1
                 start_next()
 
@@ -1311,14 +1489,70 @@ class TemplatePage(QWidget):
                 ti.setSelected(True)
         return False
 
-    def _edit_text(self, tid, txt):
+    def _edit_text(self, tid, txt, from_canvas: bool = False):
         for t in self.tpl["texts"]:
             if t["id"] == tid:
                 t["text"] = txt
                 ti = self.text_items.get(tid)
                 if ti:
                     ti.sync()
+                if from_canvas:
+                    e = self.text_edits.get(tid)
+                    if e and e.text() != txt:
+                        e.setText(txt)
+                if self.char_panel.t is t:
+                    self.char_panel.refresh_compare()
         self.dirty = True
+        self._update_title()
+
+    def start_inline_edit(self, item: "TextItem"):
+        """在画布上直接改字：文字下面弹出一个输入框，边打字画布边变；回车确定，Esc 取消。"""
+        self.finish_inline_edit()
+        sc = self.view.scene()
+        sc.clearSelection()
+        item.setSelected(True)
+        r = self.view.mapFromScene(item.mapRectToScene(text_rect(item.t))).boundingRect()
+        ed = QLineEdit(item.t.get("text", ""), self.view.viewport())
+        ed.setObjectName("InlineEdit")
+        acc = theme.current()["accent"]
+        ed.setStyleSheet("QLineEdit#InlineEdit{background:rgba(16,18,26,0.92);color:#fff;border:1.5px solid %s;"
+                         "border-radius:6px;padding:4px 8px;font-size:14px;}" % acc)
+        w = max(220, min(self.view.viewport().width() - 20, r.width() + 40))
+        x = max(6, min(self.view.viewport().width() - w - 6, r.left()))
+        y = r.bottom() + 8
+        if y + 34 > self.view.viewport().height():
+            y = max(6, r.top() - 42)
+        ed.setGeometry(int(x), int(y), int(w), 34)
+        old = item.t.get("text", "")
+        tid = item.t["id"]
+        ed.textEdited.connect(lambda txt: self._edit_text(tid, txt, from_canvas=True))
+        self._inline = (ed, tid, old)
+
+        def done(cancel=False):
+            if getattr(self, "_inline", None) is None or self._inline[0] is not ed:
+                return
+            if cancel:
+                self._edit_text(tid, old, from_canvas=True)
+            self._inline = None
+            ed.deleteLater()
+            self.view.setFocus()
+        ed.returnPressed.connect(lambda: done())
+        ed.editingFinished.connect(lambda: done())
+
+        from PySide6.QtGui import QShortcut, QKeySequence
+        sc_esc = QShortcut(QKeySequence(Qt.Key.Key_Escape), ed)
+        sc_esc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        sc_esc.activated.connect(lambda: done(cancel=True))
+        ed.show()
+        ed.setFocus()
+        ed.selectAll()
+
+    def finish_inline_edit(self):
+        cur = getattr(self, "_inline", None)
+        if cur:
+            ed = cur[0]
+            self._inline = None
+            ed.deleteLater()
 
     def add_text(self):
         if not self.tpl:
@@ -1349,23 +1583,108 @@ class TemplatePage(QWidget):
         self.build_scene()
 
     def _set_text(self, key, v):
+        self.set_text_props({key: v})
+
+    def set_text_props(self, props: dict):
         if self._loading:
             return
         it = self.selected()
         if isinstance(it, TextItem):
-            it.t[key] = v
+            it.t.update(props)
             it.sync()
             self.dirty = True
+            self._update_title()
 
-    def _font_to_all(self):
-        if not self.tpl:
-            return
-        fam = self.font_combo.currentFont().family()
-        for t in self.tpl["texts"]:
-            t["family"] = fam
-        for it in self.text_items.values():
-            it.sync()
+    def _update_title(self):
+        tpl = self.tpl
+        if tpl:
+            self.title.setText(f"{tpl.get('name')}　{tpl['w']}×{tpl['h']}" + ("　·　未保存" if self.dirty else ""))
+
+    def apply_font_to(self, src: dict, targets: list[dict]):
+        for t in targets:
+            for k in ("font", "weight", "cat", "bold", "family", "italic"):
+                if k in src:
+                    t[k] = src[k]
+                else:
+                    t.pop(k, None)
+            ti = self.text_items.get(t["id"])
+            if ti:
+                ti.sync()
         self.dirty = True
+        self._update_side()
+
+    def fit_spacing(self, t: dict) -> float | None:
+        """调字距，让这行字和原图那行一样宽（改了字数以后常用）。"""
+        o = t.get("orig") or {}
+        if o.get("text") and t.get("bl"):
+            t0 = dict(t, text=o["text"], align="left")
+            target = text_rect(t0).width()
+        else:
+            target = float(t.get("w") or 0)
+        txt = t.get("text") or ""
+        n = len(txt)
+        if n < 2 or target <= 0:
+            return None
+        t1 = dict(t, spacing=0.0)
+        w0 = text_rect(t1).width()
+        return round((target - w0) / (n - 1), 2)
+
+    def set_eyedropper(self, on: bool):
+        self.eyedrop = bool(on)
+        self.view.viewport().setCursor(Qt.CursorShape.CrossCursor if on else Qt.CursorShape.ArrowCursor)
+        if on:
+            self.mw.status.showMessage("吸管：在画布上点一下要吸取的颜色（按 Esc 取消）", 6000)
+
+    def pick_color_at(self, pos: QPointF):
+        img = self._original_image()
+        if img is None or img.isNull():
+            return
+        x, y = int(pos.x()), int(pos.y())
+        if 0 <= x < img.width() and 0 <= y < img.height():
+            c = QColor(img.pixel(x, y)).name()
+            self.set_text_props({"color": c})
+            self.char_panel.color.set_color(c)
+            self.char_panel.refresh_compare()
+        self.char_panel.dropper.blockSignals(True)
+        self.char_panel.dropper.setChecked(False)
+        self.char_panel.dropper.blockSignals(False)
+        self.set_eyedropper(False)
+
+    def _original_image(self) -> QImage | None:
+        if not self.tpl:
+            return None
+        if getattr(self, "_orig_cache", (None, None))[0] != self.tpl["id"]:
+            from .spec_engine import templates_dir
+            self._orig_cache = (self.tpl["id"], QImage(str(templates_dir() / self.tpl["id"] / "original.png")))
+        return self._orig_cache[1]
+
+    def text_preview(self, t: dict):
+        """「原图 / 现在」对比用的两张小图（同一块区域）。"""
+        it = self.text_items.get(t["id"])
+        orig = self._original_image()
+        if it is None or orig is None or orig.isNull():
+            return None
+        r = it.mapRectToScene(text_rect(t))
+        if "patch" in t:
+            x1, y1, x2, y2 = t["patch"]
+            r = r.united(QRectF(x1, y1, x2 - x1, y2 - y1))
+        m = max(4.0, r.height() * 0.15)
+        r = r.adjusted(-m, -m, m, m).intersected(QRectF(0, 0, self.tpl["w"], self.tpl["h"]))
+        if r.width() < 2 or r.height() < 2:
+            return None
+        a = orig.copy(r.toAlignedRect())
+        b = QImage(a.size(), QImage.Format.Format_ARGB32)
+        b.fill(0)
+        p = QPainter(b)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        self.exporting = True
+        try:
+            self.view.scene().render(p, QRectF(0, 0, a.width(), a.height()), QRectF(r.toAlignedRect()))
+        finally:
+            self.exporting = False
+            p.end()
+        return a, b
 
     # ---------------------------------------------------------------- 左侧状态
     def _update_side(self):
@@ -1398,16 +1717,11 @@ class TemplatePage(QWidget):
             self.shape_seg.set_value(slot_shape_key(sel.slot))
             self._loading = False
         is_text = isinstance(sel, TextItem)
-        self.style_box.setVisible(is_text)
         self.b_del_text.setEnabled(is_text)
-        if is_text:
-            self._loading = True
-            t = sel.t
-            self.font_combo.setCurrentFont(QFont(t.get("family") or DEFAULT_FONT))
-            self.size_spin.setValue(int(round(t.get("size", 24))))
-            self.color_btn.set_color(t.get("color", "#000000"))
-            self.bold.setChecked(bool(t.get("bold")))
-            self._loading = False
+        if not is_text and self.eyedrop:
+            self.char_panel.dropper.setChecked(False)
+        if (sel.t if is_text else None) is not self.char_panel.t:
+            self.char_panel.load(sel.t if is_text else None)
         out = self.cfg["export"].get("dir") or ""
         self.out_lbl.setText(f"保存到：{out}\\{self.info['folder']}" if out else "保存到：还没有选择文件夹")
         n = len(self.mw.docs)

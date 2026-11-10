@@ -454,8 +454,9 @@ def find_texts(rgb: np.ndarray, slots: list[dict], min_score: float = 0.5, ocr=N
         if h > w * 1.6 and len(text) > 1:
             continue  # 竖排文字先不处理，保留原样
         pad = max(2, int(h * 0.12))
-        X1, Y1 = int(max(0, x1 - pad)), int(max(0, y1 - pad))
-        X2, Y2 = int(min(W, x2 + pad)), int(min(H, y2 + pad))
+        vpad = max(3, int(h * 0.2))           # 识别框上下常常切掉一点笔画：上下多留一些
+        X1, Y1 = int(max(0, x1 - pad)), int(max(0, y1 - vpad))
+        X2, Y2 = int(min(W, x2 + pad)), int(min(H, y2 + vpad))
         region = rgb[Y1:Y2, X1:X2].astype(np.int32)
         if region.size == 0:
             continue
@@ -481,8 +482,11 @@ def find_texts(rgb: np.ndarray, slots: list[dict], min_score: float = 0.5, ocr=N
             "bold": density > 0.30,
             "family": "",
             "patch": [int(X1), int(Y1), int(X2), int(Y2)],   # 改字时要擦掉的原字范围
+            # 在整张图正中间的字（标题、款号）一般是居中排的：改字后往两边伸
+            "align": "center" if abs((x1 + x2) / 2 - W / 2) < W * 0.025 and w < W * 0.9 else "left",
         }
-        t["orig"] = {k: t[k] for k in ORIG_KEYS}
+        t["align_auto"] = t["align"]
+        t["orig"] = {k: t[k] for k in ORIG_KEYS if k in t}
         texts.append(t)
     texts.sort(key=lambda t: (t["y"], t["x"]))
     return texts, mask
@@ -549,6 +553,14 @@ def build_template(path: str, detector, name: str = "", kind: str = "spec", prog
             clean = erase(rgb, mask)
     else:
         clean = erase(rgb, mask)
+    if texts:
+        say("正在匹配字体")
+        try:
+            from . import fonts
+            if fonts.has_pack():
+                fonts.match_texts(rgb, clean, texts)
+        except Exception:
+            pass
     tid = uuid.uuid4().hex[:10]
     folder = templates_dir() / tid
     folder.mkdir(parents=True, exist_ok=True)
@@ -578,7 +590,7 @@ def build_template(path: str, detector, name: str = "", kind: str = "spec", prog
     tpl = {"id": tid, "kind": kind, "name": name or default_name(path, kind), "w": W, "h": H,
            "slots": slots, "texts": texts,
            "ocr_error": (last_error.strip().splitlines() or [""])[-1][:300] if last_error else "",
-           "ocr_raw": len(ocr), "confirmed": False}
+           "ocr_raw": len(ocr), "confirmed": False, "fonts_matched": any("font" in t for t in texts)}
     save_template(tpl)
     return tpl
 
@@ -685,7 +697,7 @@ def template_bg(tpl: dict) -> QImage:
     return QImage(str(templates_dir() / tpl["id"] / "bg.png"))
 
 
-ORIG_KEYS = ("text", "x", "y", "size", "color", "bold", "family")
+ORIG_KEYS = ("text", "x", "y", "size", "color", "bold", "family", "font", "weight", "spacing", "italic")
 
 
 def text_changed(t: dict) -> bool:
@@ -695,12 +707,50 @@ def text_changed(t: dict) -> bool:
         return True          # 手动加的字、旧版模板：照常画
     for k in ORIG_KEYS:
         a, b = t.get(k), o.get(k)
-        if isinstance(a, float) or isinstance(b, float):
+        if not a and not b:
+            continue                 # 空字体名 / 不斜体 / 没记录 都算一样
+        if isinstance(a, (int, float)) and not isinstance(a, bool) or isinstance(b, float):
             if abs(float(a or 0) - float(b or 0)) > 0.5:
                 return True
         elif a != b:
             return True
     return False
+
+
+def ensure_fonts(tpl: dict) -> bool:
+    """旧模板（或者导入时还没有字体包）：补上「每段字像哪个字体」。改了模板返回 True。"""
+    if tpl.get("fonts_matched") or not tpl.get("texts"):
+        return False
+    from . import fonts
+    if not fonts.has_pack():
+        return False
+    import cv2
+    folder = templates_dir() / tpl["id"]
+
+    def load(name):
+        try:
+            a = cv2.imdecode(np.fromfile(str(folder / name), np.uint8), cv2.IMREAD_COLOR)
+            return None if a is None else a[:, :, ::-1].copy()
+        except Exception:
+            return None
+    orig, clean = load("original.png"), load("bg.png")
+    if orig is None:
+        return False
+    if clean is not None and clean.shape != orig.shape:
+        clean = None
+    try:
+        fonts.match_texts(orig, clean, [t for t in tpl["texts"] if "patch" in t])
+    except Exception:
+        return False
+    W = orig.shape[1]
+    for t in tpl["texts"]:
+        if "align" not in t and "patch" in t:
+            cx = t["x"] + t.get("w", 0) / 2
+            t["align"] = "center" if abs(cx - W / 2) < W * 0.025 and t.get("w", 0) < W * 0.9 else "left"
+            t["align_auto"] = t["align"]
+    tpl["fonts_matched"] = True
+    save_template(tpl)
+    return True
 
 
 def composite_bg(tpl: dict) -> QImage:

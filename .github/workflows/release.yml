@@ -129,6 +129,12 @@ jobs:
           gh release download models-v1 -R ${{ github.repository }} -p layout.onnx -D $d --clobber
           gh release download models-v1 -R ${{ github.repository }} -p lama.onnx -D $d --clobber
           Write-Host ("layout model: " + (Get-Item (Join-Path $d "layout.onnx")).Length + " bytes")
+          # 字体包：解压到数据目录的 fonts 文件夹（和软件里下载后一样）
+          $fd = Join-Path $env:APPDATA "ImageForge Studio\fonts"
+          New-Item -ItemType Directory -Force -Path $fd | Out-Null
+          gh release download models-v1 -R ${{ github.repository }} -p fonts.zip -D $env:RUNNER_TEMP --clobber
+          Expand-Archive -Force (Join-Path $env:RUNNER_TEMP "fonts.zip") $fd
+          Write-Host ("fonts: " + (Get-ChildItem $fd).Count + " files")
 
       - name: 自检（源码）
         env:
