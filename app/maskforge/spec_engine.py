@@ -668,6 +668,13 @@ def load_templates(kind: str = "spec") -> list[dict]:
         try:
             t = json.loads(f.read_text("utf-8"))
             if t.get("kind", "spec") == kind:
+                if not isinstance(t.get("name"), str) or not t.get("name"):
+                    # 旧版本有时把模板名存坏了（存成 false），这里修回来
+                    t["name"] = "规格模板" if kind == "spec" else "详情模板"
+                    try:
+                        f.write_text(json.dumps(t, ensure_ascii=False, indent=1), "utf-8")
+                    except Exception:
+                        pass
                 res.append(t)
         except Exception:
             pass

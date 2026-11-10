@@ -451,8 +451,19 @@ def run_selftest(log_path: str | None = None) -> int:
         log(f"scan animation ok: {frames} frames, {_time.monotonic() - t_start:.1f}s")
         assert sp.in_review() and not sp.film_bar.isVisibleTo(sp), "识别完应该先显示识别结果"
         sp.view.grab()
-        sp.confirm_review(name="测试命名模板")
-        assert sp.tpl["name"] == "测试命名模板"
+        # 真的点一下「确认」按钮（之前按钮把 False 当名字传进去，存坏了模板名）
+        from . import template_lib as _tl
+        _ask = _tl.ask_name
+        _tl.ask_name = lambda *a, **k: "测试命名模板"
+        try:
+            from PySide6.QtWidgets import QPushButton
+            ok_btn = [b for b in sp.findChildren(QPushButton) if "下一步：填入素材" in b.text()]
+            assert ok_btn, "找不到确认按钮"
+            ok_btn[0].click()
+        finally:
+            _tl.ask_name = _ask
+        assert sp.tpl["name"] == "测试命名模板", sp.tpl.get("name")
+        sp.reload_templates()
         from .template_lib import TemplatePicker, ensure_thumb
         assert not ensure_thumb(sp.tpl).isNull(), "模板没有预览图"
         pk = TemplatePicker("spec", sp.tpl["id"], mw)

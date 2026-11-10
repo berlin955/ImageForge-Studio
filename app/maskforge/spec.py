@@ -676,7 +676,7 @@ class TemplatePage(QWidget):
         b_redo.clicked.connect(self.rescan)
         cr.add(row(b_adj, None, b_redo))
         b_ok = button("没问题，下一步：填入素材", "Primary")
-        b_ok.clicked.connect(self.confirm_review)
+        b_ok.clicked.connect(lambda: self.confirm_review())
         cr.add(b_ok)
         c0 = Card("用哪个版本的图")
         self.mask_seg = Segmented([("1", "打码后的图"), ("0", "原图（不打码）")])
@@ -814,7 +814,7 @@ class TemplatePage(QWidget):
     def confirm_review(self, name: str | None = None):
         if not self.tpl:
             return
-        if name is None:
+        if not isinstance(name, str) or not name:
             from .template_lib import ask_name
             name = ask_name(self, "给模板起个名字", self.tpl.get("name", ""))
             if not name:
