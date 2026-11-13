@@ -238,6 +238,8 @@ class SidePanel(QWidget):
         b_def = button("设为这个部位的默认样式", "Ghost")
         b_def.clicked.connect(mw.set_layer_as_default)
         self.s_layer.add(b_def)
+        self.s_layer.add(muted("旋转：拖码上方的圆形按钮，或者按住四个角外面一点点拖；"
+                               "[ / ] 键每次转 5°（Shift 1°），Alt+滚轮也能转；双击圆形按钮摆正。"))
 
         # ------------------------------------------------ 码的样式（默认折叠）
         self.s_style = Section("码的样式", collapsed=True)

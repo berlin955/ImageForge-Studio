@@ -88,6 +88,18 @@ def run_selftest(log_path: str | None = None) -> int:
                            {"label": "FEMALE_BREAST_COVERED", "score": 0.6, "box": (400, 400, 560, 560)}],
                           1200, 1600, cfg)
         assert [l.part for l in cov] == ["crack"] and abs(cov[0].cx - 640) < 1, [(l.part, l.cx) for l in cov]
+        assert abs(cov[0].cy - (1050 + 300 * 0.54)) < 1, cov[0].cy      # 默认比框中间略靠下
+        tl = plan_layers([{"label": "BUTTOCKS_EXPOSED", "score": 0.6, "box": (400, 1050, 800, 1350), "tilt": 20.0}],
+                         1200, 1600, cfg)
+        assert abs(tl[0].rot - 20) < 0.01 and tl[0].cx < 600, (tl[0].rot, tl[0].cx)   # 往下挪的方向也跟着斜
+        from .pose import crack_tilt
+        import numpy as _np
+        kp = _np.zeros((17, 3), _np.float32)
+        kp[11] = (300, 500, 0.9)
+        kp[12] = (200, 460, 0.9)          # 画面右边那个髋高 40 像素：顺时针转约 21.8°
+        assert abs(crack_tilt(kp, 600) - 21.8) < 0.5, crack_tilt(kp, 600)
+        kp[5], kp[6] = (330, 200, 0.9), (190, 200, 0.9)
+        assert crack_tilt(kp, 600) is None or abs(crack_tilt(kp, 600) - 21.8) < 0.5
         log("planner covered ok")
         from .detector import merge_buttocks
         stacked = plan_layers(merge_buttocks([

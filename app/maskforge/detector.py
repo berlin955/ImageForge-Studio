@@ -256,17 +256,27 @@ def plan_layers(dets: list[dict], img_w: int, img_h: int, cfg) -> list[Layer]:
             # 臀部框里的股沟：一条竖长的区域，位置按阴影微调
             cx = d.get("crack_x", cx)
             w, h = bw * 0.26, bh * 0.82
-            cy = y1 + bh * 0.47
+            # 默认比框的正中略靠下（股沟最该盖住的是下半段）；设置里「上下位置」可以再调
+            off = float((parts.get("crack") or {}).get("offset", 0.07))
+            cy = y1 + bh * (0.47 + max(-0.3, min(0.3, off)))
         else:  # areola
             s = min(bw, bh) * 0.44
             w, h = s, s
             cy = y1 + bh * 0.56
         p = parts[part]
         k = float(p.get("scale", 1.0))
-        cands.append(Layer(part=part, style=p["style"], sticker=p["sticker"], color=p["color"],
-                           block=p["block"], opacity=p.get("opacity", 1.0),
-                           cx=cx, cy=cy, w=max(6.0, w * k), h=max(6.0, h * k),
-                           auto=True, score=d["score"]))
+        L = Layer(part=part, style=p["style"], sticker=p["sticker"], color=p["color"],
+                  block=p["block"], opacity=p.get("opacity", 1.0),
+                  cx=cx, cy=cy, w=max(6.0, w * k), h=max(6.0, h * k),
+                  auto=True, score=d["score"])
+        if part == "crack" and d.get("tilt") and p.get("follow_body", True):
+            # 胯歪着的时候码跟着转，顺着股沟；往下挪的那段也沿着股沟方向挪
+            t = float(d["tilt"])
+            L.rot = round(t, 1)
+            dy = cy - (y1 + bh * 0.47)
+            L.cx = cx - dy * math.sin(math.radians(t))
+            L.cy = y1 + bh * 0.47 + dy * math.cos(math.radians(t))
+        cands.append(L)
 
     # 同一部位重叠的结果只保留分数高的
     cands.sort(key=lambda l: l.score, reverse=True)

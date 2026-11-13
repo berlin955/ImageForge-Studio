@@ -5,7 +5,7 @@ import math
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import (QColor, QCursor, QImage, QPainter, QPainterPath, QPen,
+from PySide6.QtGui import (QColor, QCursor, QImage, QPainter, QPainterPath, QPen, QPolygonF,
                            QTransform)
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsObject, QGraphicsScene, QGraphicsView
 
@@ -14,7 +14,9 @@ from .config import IMAGE_EXTS
 from .model import ImageDoc, Layer
 
 HANDLE = 10.0     # 手柄大小（屏幕像素）
-ROT_OFF = 30.0    # 旋转手柄离顶部的距离（屏幕像素）
+ROT_OFF = 34.0    # 旋转手柄离顶部的距离（屏幕像素）
+ROT_R = 9.0       # 旋转手柄的半径（屏幕像素）
+ROT_RING = 16.0   # 四个角外面这么宽的一圈也能按住旋转（屏幕像素）
 
 
 class RenderContext:
@@ -124,8 +126,8 @@ class LayerItem(QGraphicsObject):
 
     def boundingRect(self) -> QRectF:
         s = self._s()
-        pad = (HANDLE + 4) / s
-        top = (ROT_OFF + HANDLE + 4) / s
+        pad = (HANDLE + 4 + ROT_RING) / s
+        top = (ROT_OFF + ROT_R + HANDLE + 40) / s     # 上面还要放旋转时显示的角度
         r = self.body()
         return r.adjusted(-pad, -top, pad, pad)
 
@@ -133,9 +135,11 @@ class LayerItem(QGraphicsObject):
         path = QPainterPath()
         path.addRect(self.body())
         if self.isSelected() and not self.ctx.exporting:
-            t = (HANDLE + 4) / self._s()
-            for c in self._corners() + [self._rot_pt()]:
+            t = (HANDLE + 4 + ROT_RING) / self._s()
+            for c in self._corners():
                 path.addRect(QRectF(c.x() - t, c.y() - t, 2 * t, 2 * t))
+            rp, tr = self._rot_pt(), (ROT_R + 5) / self._s()
+            path.addEllipse(rp, tr, tr)
         return path
 
     def hit(self, pos: QPointF):
@@ -145,7 +149,8 @@ class LayerItem(QGraphicsObject):
         if self.isSelected():
             t = (HANDLE + 4) / self._s()
             rp = self._rot_pt()
-            if abs(pos.x() - rp.x()) <= t and abs(pos.y() - rp.y()) <= t:
+            tr = (ROT_R + 5) / self._s()
+            if (pos.x() - rp.x()) ** 2 + (pos.y() - rp.y()) ** 2 <= tr * tr:
                 return "rotate"
             # 码很小时，角的判定范围不能盖住整个码，否则只能缩放、拖不动
             tc = t if not inside else min(t, min(L.w, L.h) * 0.22)
@@ -155,7 +160,12 @@ class LayerItem(QGraphicsObject):
         if inside:
             return "move"
         if self.isSelected():
-            return "scale" if self._near_corner(pos) else None
+            if self._near_corner(pos):
+                return "scale"
+            # 和 PS / Figma 一样：鼠标放在四个角外面一点点，就可以按住转
+            ring = (HANDLE + 4 + ROT_RING) / self._s()
+            if any(abs(pos.x() - c.x()) <= ring and abs(pos.y() - c.y()) <= ring for c in self._corners()):
+                return "rotate"
         return None
 
     def _near_corner(self, pos: QPointF) -> bool:
@@ -215,14 +225,46 @@ class LayerItem(QGraphicsObject):
         p.setBrush(QColor("#ffffff"))
         for c in self._corners():
             p.drawRect(QRectF(c.x() - hs / 2, c.y() - hs / 2, hs, hs))
+        # 旋转按钮：白底圆 + 弯箭头，比原来的小圆点好找
+        rr = ROT_R / s
+        p.setBrush(QColor("#ffffff"))
+        p.drawEllipse(rp, rr, rr)
+        arc = QRectF(rp.x() - rr * 0.55, rp.y() - rr * 0.55, rr * 1.1, rr * 1.1)
+        ap = QPen(acc, 1.6)
+        ap.setCosmetic(True)
+        ap.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(ap)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawArc(arc, 60 * 16, 270 * 16)
+        tip = QPointF(rp.x() + rr * 0.55 * math.cos(math.radians(60)), rp.y() - rr * 0.55 * math.sin(math.radians(60)))
         p.setBrush(acc)
-        p.drawEllipse(rp, hs * 0.6, hs * 0.6)
+        p.setPen(Qt.PenStyle.NoPen)
+        a = rr * 0.32
+        p.drawPolygon(QPolygonF([tip + QPointF(a, -a * 0.2), tip + QPointF(-a * 0.5, -a), tip + QPointF(-a * 0.2, a * 0.6)]))
+        # 正在转的时候在旁边显示角度
+        if self._drag and self._drag.get("mode") == "rotate" and self._drag.get("pushed"):
+            p.save()
+            p.translate(rp)
+            p.rotate(-self.layer.rot)            # 字保持水平
+            p.scale(1 / s, 1 / s)
+            f = p.font()
+            f.setPixelSize(12)
+            f.setBold(True)
+            p.setFont(f)
+            txt = f"{self.layer.rot:.0f}°"
+            box = QRectF(-24, -ROT_R - 26, 48, 20)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(20, 22, 30, 220))
+            p.drawRoundedRect(box, 6, 6)
+            p.setPen(QColor("#ffffff"))
+            p.drawText(box, Qt.AlignmentFlag.AlignCenter, txt)
+            p.restore()
         p.restore()
 
     # ---- 交互 ----
     def hoverMoveEvent(self, e):
         mode = self.hit(e.pos())
-        cur = {"rotate": Qt.CursorShape.PointingHandCursor,
+        cur = {"rotate": Qt.CursorShape.CrossCursor,
                "scale": Qt.CursorShape.SizeFDiagCursor,
                "move": Qt.CursorShape.SizeAllCursor}.get(mode, Qt.CursorShape.ArrowCursor)
         self.setCursor(QCursor(cur))
@@ -238,8 +280,10 @@ class LayerItem(QGraphicsObject):
             self.setSelected(True)
         mode = self.hit(e.pos()) or "move"
         L = self.layer
-        self._drag = {"mode": mode, "start": e.scenePos(), "cx": L.cx, "cy": L.cy,
-                      "w": L.w, "h": L.h, "pushed": False}
+        sp = e.scenePos()
+        self._drag = {"mode": mode, "start": sp, "cx": L.cx, "cy": L.cy,
+                      "w": L.w, "h": L.h, "rot": L.rot, "pushed": False,
+                      "a0": math.degrees(math.atan2(sp.y() - L.cy, sp.x() - L.cx))}
         e.accept()
 
     def mouseMoveEvent(self, e):
@@ -268,7 +312,8 @@ class LayerItem(QGraphicsObject):
             L.w, L.h = w, h
         elif d["mode"] == "rotate":
             sp = e.scenePos()
-            a = math.degrees(math.atan2(sp.y() - L.cy, sp.x() - L.cx)) + 90
+            # 按下时的角度为起点，转多少加多少（从角上按住转也不会一下跳到别的角度）
+            a = d["rot"] + math.degrees(math.atan2(sp.y() - L.cy, sp.x() - L.cx)) - d["a0"]
             if mods & Qt.KeyboardModifier.ShiftModifier:
                 a = round(a / 15) * 15
             a = ((a + 540) % 360) - 180
@@ -281,6 +326,19 @@ class LayerItem(QGraphicsObject):
         self._drag = None
         if d and d["pushed"]:
             self.ctx.on_end_edit()
+        self.update()
+
+    def mouseDoubleClickEvent(self, e):
+        if self.hit(e.pos()) == "rotate" and self.layer.rot:
+            # 双击旋转按钮：摆正
+            self.ctx.on_begin_edit()
+            self.layer.rot = 0.0
+            self.sync()
+            self.ctx.on_live_edit()
+            self.ctx.on_end_edit()
+            e.accept()
+            return
+        super().mouseDoubleClickEvent(e)
 
 
 class Canvas(QGraphicsView):
@@ -521,6 +579,20 @@ class Canvas(QGraphicsView):
             self.select(None)
             e.accept()
             return
+        if k in (Qt.Key.Key_BracketLeft, Qt.Key.Key_BracketRight, Qt.Key.Key_BraceLeft, Qt.Key.Key_BraceRight):
+            # [ / ] 每次转 5°，按住 Shift 每次 1°
+            L = self.selected_layer()
+            if L is not None:
+                step = 1.0 if e.modifiers() & Qt.KeyboardModifier.ShiftModifier else 5.0
+                if not e.isAutoRepeat():
+                    self.beginEdit.emit()
+                d = -step if k in (Qt.Key.Key_BracketLeft, Qt.Key.Key_BraceLeft) else step
+                L.rot = round(((L.rot + d + 540) % 360) - 180, 1)
+                self.update_layer(L)
+                self.liveEdited.emit()
+                self.edited.emit()
+                e.accept()
+                return
         super().keyPressEvent(e)
 
     def handle_arrow(self, k, shift: bool, repeat: bool):

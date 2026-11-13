@@ -81,7 +81,9 @@ DEFAULTS: dict = {
         "lower": {"enabled": True, "covered": True, "style": "mosaic", "sticker": "builtin:heart",
                   "color": "#16171b", "block": 0.018, "scale": 0.58, "opacity": 1.0},
         "crack": {"enabled": True, "covered": True, "style": "mosaic", "sticker": "builtin:bar",
-                  "color": "#16171b", "block": 0.016, "scale": 0.5, "opacity": 1.0},
+                  "color": "#16171b", "block": 0.016, "scale": 0.5, "opacity": 1.0,
+                  "offset": 0.07,                  # 上下位置：相对臀部识别框高度往下挪多少（负数往上）
+                  "follow_body": True},            # 胯歪着时码跟着转
         "areola": {"enabled": True, "covered": False, "style": "sticker", "sticker": "builtin:heart",
                    "color": "#16171b", "block": 0.012, "scale": 0.5, "opacity": 1.0},
         "custom": {"enabled": True, "style": "blur", "sticker": "builtin:star",

@@ -6,7 +6,7 @@ import sys
 
 from PySide6.QtCore import QSize, Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPixmap
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QSpinBox, QFileDialog,
                                QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMessageBox, QStackedWidget, QVBoxLayout,
                                QWidget)
@@ -203,6 +203,18 @@ class SettingsDialog(QDialog):
             form.addRow("默认贴图", stk)
             if key != "custom":
                 form.addRow("码的大小", scale)
+            if key == "crack":
+                off = QSpinBox()
+                off.setRange(-30, 30)
+                off.setSuffix(" %")
+                off.setToolTip("一键打码时股沟码放在多高：正数往下、负数往上（相对 AI 识别出的臀部范围的高度）")
+                off.setValue(int(round(float(p.get("offset", 0.07)) * 100)))
+                off.valueChanged.connect(lambda v, k=key: self._part(k, "offset", round(v / 100, 3)))
+                form.addRow("上下位置", off)
+                fb = QCheckBox("模特胯歪着时，码自动转到顺着股沟的方向")
+                fb.setChecked(bool(p.get("follow_body", True)))
+                fb.toggled.connect(lambda on, k=key: self._part(k, "follow_body", on))
+                form.addRow("跟着身体转", fb)
             form.addRow("马赛克颗粒", block)
             c.add(form)
             self._part_widgets[key] = stk

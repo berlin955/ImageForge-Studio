@@ -95,3 +95,32 @@ def facing_of(score: float) -> str | None:
     if score <= -0.35:
         return "back"
     return None
+
+
+def crack_tilt(kp: np.ndarray | None, width: float = 1.0) -> float | None:
+    """股沟的倾斜角度（度，顺时针为正，和码的「旋转」一样）。模特侧着身、歪着胯时，
+    股沟和两边髋部的连线垂直：码跟着转这个角度就顺着股沟。看不清、或者和脊柱方向对不上时返回 None。"""
+    if kp is None:
+        return None
+    c = kp[:, 2]
+    if c[L_HIP] < 0.5 or c[R_HIP] < 0.5:
+        return None
+    a, b = kp[L_HIP, :2], kp[R_HIP, :2]
+    if a[0] > b[0]:
+        a, b = b, a
+    dx, dy = float(b[0] - a[0]), float(b[1] - a[1])
+    if abs(dx) < width * 0.05:
+        return None                              # 侧身太厉害，两边髋部叠在一起
+    hip = float(np.degrees(np.arctan2(dy, dx)))
+    if c[L_SH] > 0.5 and c[R_SH] > 0.5:
+        # 脊柱方向（肩膀中点 → 髋部中点）做个核对：差得太多说明姿势很扭，不自动转
+        sm = (kp[L_SH, :2] + kp[R_SH, :2]) / 2
+        hm = (kp[L_HIP, :2] + kp[R_HIP, :2]) / 2
+        vx, vy = float(hm[0] - sm[0]), float(hm[1] - sm[1])
+        if vy > 0:
+            spine = float(np.degrees(np.arctan2(-vx, vy)))
+            if abs(spine - hip) > 25:
+                return None
+    if abs(hip) < 4:
+        return 0.0
+    return max(-35.0, min(35.0, hip))

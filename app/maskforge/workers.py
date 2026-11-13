@@ -41,9 +41,9 @@ class DetectWorker(QThread):
             except Exception as e:
                 self.failed.emit(did, f"识别出错：{e}")
                 continue
-            self.result.emit(did, img.width(), img.height(), dets)
+            sc = None
             if self.get_pose:
-                from .pose import facing_score
+                from .pose import crack_tilt, facing_score
                 labels = [x["label"] for x in dets]
                 sc = facing_score(None, labels)
                 try:
@@ -54,8 +54,16 @@ class DetectWorker(QThread):
                             1280, 1280, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                         kp = pose.keypoints(qimage_to_rgb(small))
                         sc = facing_score(kp, labels, float(small.width()))
+                        # 胯是歪的：股沟的码跟着转（先算好再出结果，一键打码时直接用上）
+                        tilt = crack_tilt(kp, float(small.width()))
+                        if tilt:
+                            for x in dets:
+                                if x["label"].startswith(("BUTTOCKS", "ANUS")):
+                                    x["tilt"] = tilt
                 except Exception as e:
                     self.pose_error = str(e)
+            self.result.emit(did, img.width(), img.height(), dets)
+            if sc is not None:
                 self.facing.emit(did, float(sc))   # 姿态模型出问题也照样给结果（只按部位判断），不会卡住
         self.progress.emit(n, n, "")
 
