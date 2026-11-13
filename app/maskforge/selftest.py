@@ -492,6 +492,73 @@ def run_selftest(log_path: str | None = None) -> int:
         assert getattr(sp, "_inline", None) is None
         sp.view.grab()
         log("char panel ok")
+        # ---- 批量水印：自动放在右侧小臂 / 大腿上、手动调整、只换一张、撤销、导出 ----
+        import numpy as _np
+        from .watermark import auto_marks
+        kp = _np.zeros((17, 3), _np.float32)
+        kp[7], kp[9] = (300, 400, 0.9), (330, 520, 0.9)        # 画面左边那条小臂
+        kp[8], kp[10] = (700, 410, 0.9), (690, 530, 0.9)       # 画面右边那条小臂
+        kp[11], kp[12], kp[13], kp[14] = (420, 600, .9), (580, 600, .9), (420, 800, .9), (580, 800, .9)
+        wcfg = dict(mw.cfg["watermark"], place="body", prefer="forearm", size=0.16)
+        m = auto_marks(1000, 1200, 3.0, wcfg, kp)[0]
+        assert 650 < m["cx"] < 800 and 420 < m["cy"] < 520, m          # 右边那条小臂
+        m2 = auto_marks(1000, 1200, 3.0, dict(wcfg, prefer="thigh"), kp)[0]
+        assert m2["cx"] > 520 and 650 < m2["cy"] < 760, m2             # 右边大腿
+        tall = auto_marks(800, 4000, 3.0, wcfg, None)
+        assert len(tall) >= 3, len(tall)                                 # 长详情图每屏一个
+        from PySide6.QtGui import QImage as _QI, QColor as _QC
+        wdir = tmp / "wm_src"
+        wdir.mkdir(exist_ok=True)
+        for i in range(2):
+            im = _QI(900, 1100, _QI.Format.Format_RGB32)
+            im.fill(_QC(40 + i * 60, 90, 140))
+            im.save(str(wdir / f"款{i + 1}.jpg"))
+        wp = mw.watermark_page
+        mw.show_page("watermark")
+        app.processEvents()
+        wp.clear_items()
+        wp.add_paths([str(wdir)])
+        assert len(wp.items) == 2, wp.items
+        wp.cur = 0
+        wp.show_current()
+        L0 = wp.state[wp.items[0]["key"]]["layers"][0]
+        assert wp.canvas.selected_layer() is L0
+        # 手动拖一下、转一下：记住，撤销能回去
+        wp._begin_edit()
+        L0.cx += 30
+        L0.rot = 25
+        wp._end_edit()
+        assert wp.state[wp.items[0]["key"]]["manual"]
+        wp.undo()
+        L0b = wp.state[wp.items[0]["key"]]["layers"][0]
+        assert abs(L0b.rot) < 0.01, L0b.rot
+        wp.redo()
+        assert abs(wp.state[wp.items[0]["key"]]["layers"][0].rot - 25) < 0.01
+        # 新建一个文字水印，只换第二张
+        sid = wp.lib.add_text("测试水印", None, "#ff0000", "#000000")
+        wp.cur = 1
+        wp.show_current()
+        st1 = wp.state[wp.items[1]["key"]]
+        st1["mark"] = sid
+        wp._swap_mark(st1, sid)
+        assert st1["layers"][0].sticker == sid
+        assert wp.state[wp.items[0]["key"]]["layers"][0].sticker != sid
+        wout = tmp / "wm_out"
+        n = wp._export(list(wp.items), out=wout)
+        assert n == 2, n
+        o2 = _QI(str(wout / "款2_水印.jpg"))
+        L1 = st1["layers"][0]
+        k = st1["k"]
+        bgc = o2.pixelColor(5, 5)
+        diff = 0
+        for gx in range(-8, 9):
+            for gy in range(-3, 4):
+                c = o2.pixelColor(int((L1.cx + gx * L1.w / 18) / k), int((L1.cy + gy * L1.h / 8) / k))
+                diff = max(diff, abs(c.red() - bgc.red()) + abs(c.green() - bgc.green()) + abs(c.blue() - bgc.blue()))
+        assert diff > 80, diff                                             # 水印确实画上去了
+        assert o2.width() == 900 and o2.height() == 1100, o2.size()
+        wp.canvas.grab()
+        log("watermark ok")
         sp.name_edit.setText("测试规格图")
         path = sp.export_current()
         assert path and Path(path).exists(), path

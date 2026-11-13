@@ -296,9 +296,12 @@ class MainWindow(QMainWindow):
         self.spec_page = SpecPage(self)
         self.detail_page = DetailPage(self)
         from .template_lib import TemplatesPage
+        from .watermark import WatermarkPage
         self.templates_page = TemplatesPage(self)
+        self.watermark_page = WatermarkPage(self)
         built = {"assets": self.assets_page, "mask": self.mask_page, "main": self.main_page,
-                 "spec": self.spec_page, "detail": self.detail_page, "templates": self.templates_page}
+                 "spec": self.spec_page, "detail": self.detail_page, "templates": self.templates_page,
+                 "watermark": self.watermark_page}
         soon = {
             "spec": ("智能规格", "导入一张喜欢的规格图，自动挖空原来的模特照片、识别文字，换成你的模特图，文字可以随时修改。"),
             "detail": ("智能详情", "和智能规格一样换模特、改文字，支持很长的详情图，导出时可以自动切成几段。"),
@@ -809,12 +812,20 @@ class MainWindow(QMainWindow):
         self.status.showMessage(f"已设为「{PART_NAMES.get(L.part, L.part)}」的默认样式", 5000)
 
     def undo(self):
+        page = self.pages.currentWidget()
+        if page is not self.mask_page and hasattr(page, "undo"):
+            page.undo()               # 水印页等有自己的撤销
+            return
         d = self.cur_doc()
         if d and d.undo():
             self.canvas.rebuild()
             self._refresh_doc_state()
 
     def redo(self):
+        page = self.pages.currentWidget()
+        if page is not self.mask_page and hasattr(page, "redo"):
+            page.redo()
+            return
         d = self.cur_doc()
         if d and d.redo():
             self.canvas.rebuild()

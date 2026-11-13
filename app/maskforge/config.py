@@ -89,6 +89,11 @@ DEFAULTS: dict = {
         "custom": {"enabled": True, "style": "blur", "sticker": "builtin:star",
                    "color": "#16171b", "block": 0.02, "scale": 1.0, "opacity": 1.0},
     },
+    "watermark": {
+        "mark": "", "use_mask": True, "place": "body", "prefer": "forearm", "corner": "br", "margin": 0.03,
+        "long_repeat": True, "size": 0.16, "opacity": 0.85, "rot": 0.0, "suffix": "_水印", "folder": "水印",
+        "tile": {"enabled": False, "opacity": 0.12, "size": 0.18, "gap": 1.2, "angle": -30.0},
+    },
     "mainimg": {
         "size": 800,
         "custom": 1200,
